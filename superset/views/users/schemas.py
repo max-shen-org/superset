@@ -16,10 +16,10 @@
 # under the License.
 from typing import Any
 
-from flask_appbuilder.security.sqla.apis.user.schema import User
 from flask_appbuilder.security.sqla.apis.user.validator import (
     PasswordComplexityValidator,
 )
+from flask_appbuilder.security.sqla.models import User
 from marshmallow import fields, Schema, validates_schema, ValidationError
 from marshmallow.fields import Boolean, Integer, String
 from marshmallow.validate import Length
