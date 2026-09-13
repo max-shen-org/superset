@@ -109,7 +109,7 @@ class ScreenshotCachePayload:
         status: StatusValues = StatusValues.PENDING,
         timestamp: str = "",
         scope: str | None = None,
-    ):
+    ) -> None:
         self._image = image
         self._timestamp = timestamp or datetime.now().isoformat()
         self.status = StatusValues.UPDATED if image else status
@@ -241,7 +241,7 @@ class BaseScreenshot:
     # every dashboard and chart.
     cache_scope: str | None = None
 
-    def __init__(self, url: str, digest: str | None):
+    def __init__(self, url: str, digest: str | None) -> None:
         self.digest = digest
         self.url = url
         self.screenshot = None
@@ -483,7 +483,7 @@ class ChartScreenshot(BaseScreenshot):
         digest: str | None,
         window_size: WindowSize | None = None,
         thumb_size: WindowSize | None = None,
-    ):
+    ) -> None:
         # Chart reports are in standalone="true" mode
         url = modify_url_query(
             url,
@@ -504,7 +504,7 @@ class DashboardScreenshot(BaseScreenshot):
         digest: str | None,
         window_size: WindowSize | None = None,
         thumb_size: WindowSize | None = None,
-    ):
+    ) -> None:
         # per the element above, dashboard screenshots
         # should always capture in standalone
         url = modify_url_query(
