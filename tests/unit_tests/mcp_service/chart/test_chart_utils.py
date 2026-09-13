@@ -38,6 +38,7 @@ from superset.mcp_service.chart.chart_utils import (
     map_filter_operator,
     map_table_config,
     map_xy_config,
+    merge_chart_form_data,
     merge_interactive_pivot_ui_config,
     merge_table_column_config,
     validate_chart_dataset,
@@ -47,6 +48,7 @@ from superset.mcp_service.chart.schemas import (
     ColumnRef,
     FilterConfig,
     LegendConfig,
+    PieChartConfig,
     SortByConfig,
     TableChartConfig,
     XYChartConfig,
@@ -2497,3 +2499,65 @@ class TestDatasetValidatorSkipsSqlMetrics:
         )
         assert normalized.y[0].sql_expression == _SQL_EXPR
         assert normalized.y[0].name is None
+
+
+def _pie(**overrides: Any) -> PieChartConfig:
+    base: dict[str, Any] = {
+        "chart_type": "pie",
+        "dimension": {"name": "country"},
+        "metric": {"name": "population", "aggregate": "SUM"},
+    }
+    return PieChartConfig(**{**base, **overrides})
+
+
+def _xy(**overrides: Any) -> XYChartConfig:
+    base: dict[str, Any] = {
+        "chart_type": "xy",
+        "x": {"name": "ds"},
+        "y": [{"name": "sales", "aggregate": "SUM"}],
+        "kind": "line",
+    }
+    return XYChartConfig(**{**base, **overrides})
+
+
+def _merge(saved_cfg: Any, update_cfg: Any) -> dict[str, Any]:
+    saved = map_config_to_form_data(saved_cfg)
+    return merge_chart_form_data(saved, map_config_to_form_data(update_cfg), update_cfg)
+
+
+def test_merge_keeps_saved_color_scheme_and_row_limit_when_omitted() -> None:
+    merged = _merge(
+        _pie(color_scheme="lyftColors", row_limit=25),
+        _pie(metric={"name": "gdp_total", "aggregate": "SUM"}),
+    )
+    assert merged["metric"]["label"] == "SUM(gdp_total)"
+    assert merged["color_scheme"] == "lyftColors"
+    assert merged["row_limit"] == 25
+
+
+def test_merge_keeps_saved_row_limit_for_xy_when_omitted() -> None:
+    merged = _merge(
+        _xy(color_scheme="lyftColors", row_limit=50),
+        _xy(y=[{"name": "profit", "aggregate": "SUM"}]),
+    )
+    assert merged["color_scheme"] == "lyftColors"
+    assert merged["row_limit"] == 50
+
+
+def test_merge_explicit_defaults_override_saved_values() -> None:
+    merged = _merge(
+        _pie(color_scheme="lyftColors", row_limit=25),
+        _pie(color_scheme="supersetColors", row_limit=100),
+    )
+    assert merged["color_scheme"] == "supersetColors"
+    assert merged["row_limit"] == 100
+
+
+def test_merge_falls_back_to_defaults_when_nothing_saved() -> None:
+    saved = map_config_to_form_data(_pie())
+    saved.pop("color_scheme")
+    saved.pop("row_limit")
+    cfg = _pie()
+    merged = merge_chart_form_data(saved, map_config_to_form_data(cfg), cfg)
+    assert merged["color_scheme"] == "supersetColors"
+    assert merged["row_limit"] == 100

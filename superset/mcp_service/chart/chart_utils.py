@@ -652,6 +652,22 @@ _GAUGE_PRESENTATION_FORM_DATA_KEYS = frozenset(
 )
 
 
+def _defaulted_form_data_fields(config: ChartConfig) -> Mapping[str, str]:
+    """Return the plugin's config-field -> form_data map of defaulted controls."""
+    # Local import: see map_config_to_form_data for the plugin import cycle.
+    from superset.mcp_service.chart.registry import get_registry
+
+    chart_type = getattr(config, "chart_type", None)
+    plugin = get_registry().get(chart_type) if chart_type else None
+    if plugin is None:
+        return {}
+    return {
+        config_field: form_data_field
+        for config_field, form_data_field in plugin.defaulted_form_data_fields.items()
+        if config_field in type(config).model_fields
+    }
+
+
 def _without_generated_gauge_time_filter(
     form_data: dict[str, Any],
 ) -> list[Any]:
@@ -693,7 +709,13 @@ def merge_chart_form_data(  # noqa: C901
         fields_set = config.model_fields_set
         if "filters" not in fields_set:
             preserve_previous_adhoc_filters(new_form_data, existing_form_data)
-        merged = {**existing_form_data, **new_form_data}
+        patch = dict(new_form_data)
+        for config_field, form_data_field in _defaulted_form_data_fields(
+            config
+        ).items():
+            if config_field not in fields_set and form_data_field in existing_form_data:
+                patch.pop(form_data_field, None)
+        merged = {**existing_form_data, **patch}
         # An explicitly empty collection clears the control rather than
         # falling through to the inherited value.
         for config_field, form_data_field in (

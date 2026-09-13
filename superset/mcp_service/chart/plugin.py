@@ -56,6 +56,11 @@ class ChartTypePlugin(Protocol):
     #: needing a separate JSON mapping file.
     native_viz_types: ClassVar[Mapping[str, str]]
 
+    #: Config fields whose ``to_form_data`` output always carries a value,
+    #: keyed to the form_data field they populate. ``merge_chart_form_data``
+    #: keeps the saved value for any of these the caller omitted on update.
+    defaulted_form_data_fields: ClassVar[Mapping[str, str]]
+
     def pre_validate(
         self,
         config: dict[str, Any],
@@ -199,6 +204,14 @@ class BaseChartPlugin:
     display_name: str = ""
     # Subclasses must override this with their own class attribute.
     native_viz_types: ClassVar[Mapping[str, str]] = {}
+    #: Config fields whose ``to_form_data`` output always carries a value
+    #: (schema default or fallback), keyed to the form_data field they
+    #: populate. On update, a field the caller omitted keeps the saved value
+    #: instead of being reset to that default.
+    defaulted_form_data_fields: ClassVar[Mapping[str, str]] = {
+        "color_scheme": "color_scheme",
+        "row_limit": "row_limit",
+    }
 
     def is_available(self) -> bool:
         """Return whether the host deployment provides this visualization."""
