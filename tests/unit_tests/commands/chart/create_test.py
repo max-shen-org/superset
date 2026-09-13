@@ -125,6 +125,33 @@ def test_create_chart_accepts_table_datasource(mocker: MockerFixture) -> None:
     assert cmd._properties["datasource_name"] == "my_table"
 
 
+def test_create_chart_accepts_semantic_view_datasource(mocker: MockerFixture) -> None:
+    """Semantic views are a supported chart datasource (Slice resolves them
+    via the ``semantic_view`` relationship), so saving a chart built on one
+    must not be rejected as an invalid datasource_type."""
+    _base_mocks(mocker)
+    datasource = mocker.MagicMock(name="semantic_view_datasource")
+    datasource.name = "my_view"
+    get_datasource_by_id = mocker.patch(
+        "superset.commands.chart.create.get_datasource_by_id",
+        return_value=datasource,
+    )
+    mocker.patch("superset.commands.chart.create.security_manager.raise_for_access")
+
+    cmd = CreateChartCommand(
+        {
+            "datasource_id": 11,
+            "datasource_type": "semantic_view",
+            "slice_name": "some_name",
+            "viz_type": "table",
+        }
+    )
+    cmd.validate()
+
+    get_datasource_by_id.assert_called_once_with(11, "semantic_view")
+    assert cmd._properties["datasource_name"] == "my_view"
+
+
 def test_create_chart_datasource_access_denied_still_raises_forbidden(
     mocker: MockerFixture,
 ) -> None:

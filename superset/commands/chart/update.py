@@ -25,6 +25,7 @@ from marshmallow import ValidationError
 
 from superset import security_manager
 from superset.commands.base import BaseCommand, UpdateMixin
+from superset.commands.chart.create import CHART_DATASOURCE_TYPES
 from superset.commands.chart.exceptions import (
     ChartForbiddenError,
     ChartInvalidError,
@@ -49,7 +50,6 @@ from superset.extensions import db
 from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
 from superset.tags.models import ObjectType
-from superset.utils.core import DatasourceType
 from superset.utils.decorators import on_error, transaction
 from superset.versioning.changes.normalization import (
     register_matching_normalization_context,
@@ -192,8 +192,8 @@ class UpdateChartCommand(UpdateMixin, BaseCommand):
         # we don't clobber that message with DatasourceTypeInvalidError.
         if datasource_type:
             try:
-                # Slice.datasource only ever resolves the ``table``
-                # relationship (see Slice.datasource in
+                # Charts can only be backed by the datasource types Slice
+                # resolves (see Slice.resolved_datasource in
                 # superset/models/slice.py), so setting datasource_type to
                 # anything else would "succeed" but leave the chart
                 # permanently unable to render -- even for a type-only
@@ -202,7 +202,7 @@ class UpdateChartCommand(UpdateMixin, BaseCommand):
                 # below (SavedQuery/Query have no ``.name`` attribute, so
                 # accessing it raises an unhandled AttributeError) or
                 # silently.
-                if datasource_type != DatasourceType.TABLE:
+                if datasource_type not in CHART_DATASOURCE_TYPES:
                     raise DatasourceTypeInvalidError()
                 if datasource_id is not None:
                     datasource = get_datasource_by_id(datasource_id, datasource_type)

@@ -44,6 +44,10 @@ from superset.utils.decorators import on_error, transaction
 
 logger = logging.getLogger(__name__)
 
+CHART_DATASOURCE_TYPES = frozenset(
+    {DatasourceType.TABLE.value, DatasourceType.SEMANTIC_VIEW.value}
+)
+
 
 class CreateChartCommand(CreateMixin, BaseCommand):
     def __init__(self, data: dict[str, Any]):
@@ -74,15 +78,15 @@ class CreateChartCommand(CreateMixin, BaseCommand):
 
         # Validate/Populate datasource
         try:
-            # Slice.datasource only ever resolves the ``table`` relationship
-            # (see Slice.datasource in superset/models/slice.py), so a chart
-            # pointed at any other datasource_type would "create"
+            # Charts can only be backed by the datasource types Slice resolves
+            # (see Slice.resolved_datasource in superset/models/slice.py), so
+            # a chart pointed at any other datasource_type would "create"
             # successfully but could never actually render. Reject those
             # up front instead of failing later -- either at this lookup
             # (SavedQuery/Query have no ``.name`` attribute, so accessing it
             # below raises an unhandled AttributeError) or silently, by
             # producing a permanently broken chart.
-            if datasource_type != DatasourceType.TABLE:
+            if datasource_type not in CHART_DATASOURCE_TYPES:
                 raise DatasourceTypeInvalidError()
             datasource = get_datasource_by_id(datasource_id, datasource_type)
             self._properties["datasource_name"] = datasource.name

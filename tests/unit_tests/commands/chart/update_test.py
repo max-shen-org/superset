@@ -280,6 +280,35 @@ def test_update_chart_rejects_repointing_to_non_table_datasource(
     get_datasource_by_id.assert_not_called()
 
 
+def test_update_chart_accepts_semantic_view_datasource(
+    mocker: MockerFixture,
+) -> None:
+    """Repointing a chart at a semantic view is allowed: Slice resolves that
+    type via its ``semantic_view`` relationship, so it renders fine."""
+    find_by_id = mocker.patch("superset.commands.chart.update.ChartDAO.find_by_id")
+    find_by_id.return_value = mocker.MagicMock(id=1, tags=[], dashboards=[])
+    mocker.patch("superset.commands.chart.update.security_manager.raise_for_editorship")
+    mocker.patch(
+        "superset.commands.chart.update.compute_subjects",
+        side_effect=lambda model, properties, exceptions: None,
+    )
+    datasource = mocker.MagicMock()
+    datasource.name = "my_view"
+    get_datasource_by_id = mocker.patch(
+        "superset.commands.chart.update.get_datasource_by_id",
+        return_value=datasource,
+    )
+    mocker.patch("superset.commands.chart.update.security_manager.raise_for_access")
+
+    cmd = UpdateChartCommand(
+        1, {"datasource_id": 11, "datasource_type": "semantic_view"}
+    )
+    cmd.validate()
+
+    get_datasource_by_id.assert_called_once_with(11, "semantic_view")
+    assert cmd._properties["datasource_name"] == "my_view"
+
+
 def test_update_chart_missing_datasource_type_keeps_required_error(
     mocker: MockerFixture,
 ) -> None:
