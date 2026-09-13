@@ -38,7 +38,7 @@ class SupersetProfiler:  # pylint: disable=too-few-public-methods
         self,
         app: Callable[[Any, Any], Any],
         interval: float = 0.0001,
-    ):
+    ) -> None:
         self.app = app
         self.interval = interval
 

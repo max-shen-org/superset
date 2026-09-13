@@ -44,7 +44,7 @@ class MachineAuthProvider:
         self,
         auth_webdriver_func_override: Callable[[BrowserContext, User], BrowserContext]
         | None = None,
-    ):
+    ) -> None:
         # This is here in order to allow for the authenticate_browser_context
         # func to be overridden via config, as opposed to the entire
         # provider implementation
