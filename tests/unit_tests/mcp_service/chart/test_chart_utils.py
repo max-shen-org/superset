@@ -38,6 +38,7 @@ from superset.mcp_service.chart.chart_utils import (
     map_filter_operator,
     map_table_config,
     map_xy_config,
+    merge_chart_form_data,
     merge_interactive_pivot_ui_config,
     merge_table_column_config,
     validate_chart_dataset,
@@ -47,6 +48,7 @@ from superset.mcp_service.chart.schemas import (
     ColumnRef,
     FilterConfig,
     LegendConfig,
+    PieChartConfig,
     SortByConfig,
     TableChartConfig,
     XYChartConfig,
@@ -2497,3 +2499,60 @@ class TestDatasetValidatorSkipsSqlMetrics:
         )
         assert normalized.y[0].sql_expression == _SQL_EXPR
         assert normalized.y[0].name is None
+
+
+class TestMergeChartFormDataDefaultedControls:
+    """Omitted controls with mapper-materialized defaults keep saved values."""
+
+    @staticmethod
+    def _pie(**overrides: Any) -> PieChartConfig:
+        base: dict[str, Any] = {
+            "chart_type": "pie",
+            "dimension": {"name": "country"},
+            "metric": {"name": "population", "aggregate": "SUM"},
+        }
+        return PieChartConfig(**{**base, **overrides})
+
+    def test_omitted_color_scheme_and_row_limit_keep_saved_values(self) -> None:
+        saved = map_config_to_form_data(
+            self._pie(color_scheme="lyftColors", row_limit=25)
+        )
+        cfg = self._pie(metric={"name": "gdp_total", "aggregate": "SUM"})
+        merged = merge_chart_form_data(saved, map_config_to_form_data(cfg), cfg)
+        assert merged["metric"]["label"] == "SUM(gdp_total)"
+        assert merged["color_scheme"] == "lyftColors"
+        assert merged["row_limit"] == 25
+
+    def test_explicit_values_still_override_saved_values(self) -> None:
+        saved = map_config_to_form_data(
+            self._pie(color_scheme="lyftColors", row_limit=25)
+        )
+        cfg = self._pie(color_scheme="supersetColors", row_limit=100)
+        merged = merge_chart_form_data(saved, map_config_to_form_data(cfg), cfg)
+        assert merged["color_scheme"] == "supersetColors"
+        assert merged["row_limit"] == 100
+
+    def test_omitted_controls_use_defaults_when_not_saved(self) -> None:
+        saved = map_config_to_form_data(self._pie())
+        saved.pop("color_scheme")
+        saved.pop("row_limit")
+        cfg = self._pie()
+        merged = merge_chart_form_data(saved, map_config_to_form_data(cfg), cfg)
+        assert merged["color_scheme"] == "supersetColors"
+        assert merged["row_limit"] == 100
+
+    def test_xy_omitted_controls_keep_saved_values(self) -> None:
+        def xy(**overrides: Any) -> XYChartConfig:
+            base: dict[str, Any] = {
+                "chart_type": "xy",
+                "x": {"name": "ds"},
+                "y": [{"name": "sales", "aggregate": "SUM"}],
+                "kind": "line",
+            }
+            return XYChartConfig(**{**base, **overrides})
+
+        saved = map_config_to_form_data(xy(color_scheme="lyftColors", row_limit=50))
+        cfg = xy(y=[{"name": "profit", "aggregate": "SUM"}])
+        merged = merge_chart_form_data(saved, map_config_to_form_data(cfg), cfg)
+        assert merged["color_scheme"] == "lyftColors"
+        assert merged["row_limit"] == 50

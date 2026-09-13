@@ -652,6 +652,11 @@ _GAUGE_PRESENTATION_FORM_DATA_KEYS = frozenset(
 )
 
 
+#: Config fields whose ``map_*_config`` mapper always emits a value (schema
+#: default or fallback), named identically in form_data.
+_DEFAULTED_PRESENTATION_FORM_DATA_KEYS = ("color_scheme", "row_limit")
+
+
 def _without_generated_gauge_time_filter(
     form_data: dict[str, Any],
 ) -> list[Any]:
@@ -704,6 +709,16 @@ def merge_chart_form_data(  # noqa: C901
         ):
             if config_field in fields_set and getattr(config, config_field, None) == []:
                 merged.pop(form_data_field, None)
+        # Mappers materialize schema defaults for these controls, so an
+        # omitted field is indistinguishable from an explicit default in the
+        # patch; fall back to the saved value when the caller did not set it.
+        for form_data_field in _DEFAULTED_PRESENTATION_FORM_DATA_KEYS:
+            if (
+                form_data_field in config.__class__.model_fields
+                and form_data_field not in fields_set
+                and form_data_field in existing_form_data
+            ):
+                merged[form_data_field] = existing_form_data[form_data_field]
         return merged
 
     fields_set = config.model_fields_set
