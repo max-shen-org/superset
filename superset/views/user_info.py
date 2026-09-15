@@ -24,11 +24,18 @@ from .base import BaseSupersetView
 
 
 class UserInfoView(BaseSupersetView):
+    """SPA shell for the signed-in user's own profile page.
+
+    Guarded by ``can_userinfo on UserInfo`` (in ``ACCESSIBLE_PERMS``) so every
+    authenticated role can open it, rather than the Admin-only ``can_read on
+    User``.
+    """
+
     route_base = "/"
-    class_permission_name = "user"
+    class_permission_name = "UserInfo"
 
     @expose("/user_info/")
     @has_access
-    @permission_name("read")
+    @permission_name("userinfo")
     def list(self) -> FlaskResponse:
         return super().render_app_template()
