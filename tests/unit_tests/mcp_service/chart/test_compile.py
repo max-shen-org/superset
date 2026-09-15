@@ -23,10 +23,14 @@ path so fast-path tools (``generate_explore_link``, ``update_chart_preview``)
 that only use Tier-1 validation are exercised end-to-end.
 """
 
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from flask import current_app
 
+from superset.charts.data.form_data import set_query_context_form_data
+from superset.mcp_service.chart import compile as compile_module
 from superset.mcp_service.chart.compile import (
     CompileResult,
     validate_and_compile,
@@ -43,6 +47,20 @@ from superset.mcp_service.chart.schemas import (
 from superset.mcp_service.chart.validation.dataset_validator import (
     build_dataset_context_from_orm,
 )
+
+
+@pytest.fixture(autouse=True)
+def _tolerate_fake_query_contexts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Many tests hand ``_compile_chart`` a bare ``Mock()`` query context; the
+    Jinja form-data helper only serializes real ``QueryObject`` shapes."""
+
+    def shim(query_context, datasource_id, datasource_type):
+        try:
+            set_query_context_form_data(query_context, datasource_id, datasource_type)
+        except (AttributeError, TypeError):
+            pass
+
+    monkeypatch.setattr(compile_module, "set_query_context_form_data", shim)
 
 
 def _orm_dataset(
@@ -681,3 +699,46 @@ def test_aggregation_ambiguity_returns_validation_errors() -> None:
     )
     assert len(errors) == 1
     assert errors[0].error_code == "AMBIGUOUS_DATASET_REFERENCE"
+
+
+@patch("superset.commands.chart.data.get_data_command.ChartDataCommand")
+@patch("superset.mcp_service.chart.chart_helpers.build_query_context_from_form_data")
+def test_compile_chart_exposes_query_to_jinja_like_chart_data_api(
+    mock_build_query_context, mock_cmd_cls
+) -> None:
+    """The compile check must render request-dependent Jinja macros with the
+    same inputs as get_chart_data, so it validates the SQL that will run."""
+    from superset.common.query_object import QueryObject
+    from superset.jinja_context import ExtraCache, get_dataset_id_from_context
+    from superset.mcp_service.chart.compile import _compile_chart
+
+    query = QueryObject(
+        filters=[{"col": "region", "op": "IN", "val": ["North"]}],
+        time_range="Last week",
+    )
+    mock_build_query_context.return_value = SimpleNamespace(
+        queries=[query], form_data={"url_params": {"tenant": "acme"}}
+    )
+    seen: dict[str, object] = {}
+
+    def run() -> dict[str, object]:
+        extra_cache = ExtraCache()
+        seen["filter_values"] = extra_cache.filter_values("region")
+        seen["url_param"] = extra_cache.url_param("tenant")
+        seen["time_range"] = extra_cache.get_time_filter().time_range
+        seen["dataset_id"] = get_dataset_id_from_context("count")
+        return {"queries": [{"data": [{"count": 1}]}]}
+
+    mock_cmd_cls.return_value.validate.return_value = None
+    mock_cmd_cls.return_value.run.side_effect = run
+
+    with current_app.test_request_context():
+        result = _compile_chart({"viz_type": "table", "metrics": ["count"]}, 3)
+
+    assert result.success
+    assert seen == {
+        "filter_values": ["North"],
+        "url_param": "acme",
+        "time_range": "Last week",
+        "dataset_id": 3,
+    }

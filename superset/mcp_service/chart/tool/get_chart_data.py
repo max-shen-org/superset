@@ -45,6 +45,7 @@ from superset.mcp_service.chart.chart_helpers import (
     get_cached_form_data,
     merge_extra_form_data_filters_into_query,
     rejected_requested_filter_columns,
+    resolve_form_data_datasource,
 )
 from superset.mcp_service.chart.chart_utils import validate_chart_dataset
 from superset.mcp_service.chart.query_result import (
@@ -1066,6 +1067,12 @@ async def _query_from_form_data(  # noqa: C901
             order_desc=form_data.get("order_desc", True),
             force=effective_force,
             custom_cache_timeout=request.cache_timeout,
+        )
+        resolved_id, resolved_type = resolve_form_data_datasource(form_data)
+        set_query_context_form_data(
+            query_context,
+            int(resolved_id or datasource_id),
+            resolved_type,
         )
 
         await ctx.report_progress(3, 4, "Executing data query")
