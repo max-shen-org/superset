@@ -151,6 +151,18 @@ def build_manifest(cwd: Path, remote_entry: str | None) -> Manifest:
 
     extension = ExtensionConfig.model_validate(extension_data)
 
+    if "id" in Manifest.model_fields:
+        click.secho(
+            "❌ The installed apache-superset-core is too old for this version of "
+            "superset-extensions-cli (Manifest.id is still an input field). "
+            "Upgrade apache-superset-core, e.g. "
+            "`pip install ./superset-core ./superset-extensions-cli` "
+            "from a Superset checkout.",
+            err=True,
+            fg="red",
+        )
+        sys.exit(1)
+
     frontend: ManifestFrontend | None = None
     if remote_entry:
         frontend = ManifestFrontend(

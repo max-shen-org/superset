@@ -344,6 +344,28 @@ def test_build_manifest_exits_when_extension_json_missing(isolated_filesystem):
     assert exc_info.value.code == 1
 
 
+@pytest.mark.unit
+def test_build_manifest_exits_when_core_is_stale(isolated_filesystem, capsys):
+    """Test build_manifest fails clearly when core still requires Manifest.id."""
+    extension_data = {
+        "publisher": "minimal-org",
+        "name": "minimal-extension",
+        "displayName": "Minimal Extension",
+        "version": "0.1.0",
+        "permissions": [],
+    }
+    (isolated_filesystem / "extension.json").write_text(json.dumps(extension_data))
+
+    with (
+        patch.dict("superset_extensions_cli.cli.Manifest.model_fields", {"id": Mock()}),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        build_manifest(isolated_filesystem, None)
+
+    assert exc_info.value.code == 1
+    assert "apache-superset-core is too old" in capsys.readouterr().err
+
+
 # Frontend Build Tests
 @pytest.mark.unit
 def test_clean_dist_frontend_removes_frontend_dist(isolated_filesystem):
