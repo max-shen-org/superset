@@ -526,6 +526,87 @@ def test_get_time_partition_column_uses_catalog_in_table_reference(
     client.get_table.assert_called_once_with("other_project.my_dataset.my_table")
 
 
+def test_get_max_partition_id_excludes_special_partitions(
+    mocker: MockerFixture,
+) -> None:
+    """
+    Test that ``__NULL__`` and ``__UNPARTITIONED__`` partitions are ignored.
+    """
+    from sqlalchemy.dialects import sqlite
+
+    from superset.db_engine_specs.bigquery import BigQueryEngineSpec
+
+    database = mock.MagicMock()
+    database.get_dialect.return_value = sqlite.dialect()
+    cursor = mock.Mock()
+    cursor.fetchone.return_value = ("20240101",)
+    conn = database.get_raw_connection.return_value.__enter__.return_value
+    conn.cursor.return_value = cursor
+
+    result = BigQueryEngineSpec.get_max_partition_id(
+        database,
+        Table("my_table", "my_dataset", "my_project"),
+    )
+
+    assert result == "20240101"
+    sql = cursor.execute.call_args[0][0]
+    assert "'__NULL__'" in sql
+    assert "'__UNPARTITIONED__'" in sql
+    assert "NOT IN" in sql
+
+
+def test_where_latest_partition_without_usable_partition(
+    mocker: MockerFixture,
+) -> None:
+    """
+    Test that no WHERE clause is added when there is no usable time partition.
+    """
+    from sqlalchemy import column, select
+
+    from superset.db_engine_specs.bigquery import BigQueryEngineSpec
+
+    mocker.patch.object(
+        BigQueryEngineSpec, "get_time_partition_column", return_value="ds"
+    )
+    mocker.patch.object(BigQueryEngineSpec, "get_max_partition_id", return_value=None)
+
+    query = select(column("a"))
+    result = BigQueryEngineSpec.where_latest_partition(
+        mock.Mock(),
+        Table("my_table", "my_dataset"),
+        query,
+    )
+
+    assert result is query
+    assert "WHERE" not in str(result)
+
+
+def test_where_latest_partition_with_partition(mocker: MockerFixture) -> None:
+    """
+    Test that the latest numeric partition is used in the WHERE clause.
+    """
+    from sqlalchemy import column, select
+
+    from superset.db_engine_specs.bigquery import BigQueryEngineSpec
+
+    mocker.patch.object(
+        BigQueryEngineSpec, "get_time_partition_column", return_value="ds"
+    )
+    mocker.patch.object(
+        BigQueryEngineSpec, "get_max_partition_id", return_value="20240101"
+    )
+
+    result = BigQueryEngineSpec.where_latest_partition(
+        mock.Mock(),
+        Table("my_table", "my_dataset"),
+        select(column("a")),
+    )
+
+    assert result is not None
+    sql = str(result.compile(compile_kwargs={"literal_binds": True}))
+    assert "PARSE_DATE('%Y%m%d', '20240101')" in sql
+
+
 def test_adjust_engine_params_catalog_as_host() -> None:
     """
     Test passing a custom catalog.

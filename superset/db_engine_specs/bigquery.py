@@ -551,9 +551,11 @@ class BigQueryEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-met
     ) -> Select | None:
         if partition_column := cls.get_time_partition_column(database, table):
             max_partition_id = cls.get_max_partition_id(database, table)
-            query = query.where(
-                column(partition_column) == func.PARSE_DATE("%Y%m%d", max_partition_id)
-            )
+            if max_partition_id is not None:
+                query = query.where(
+                    column(partition_column)
+                    == func.PARSE_DATE("%Y%m%d", max_partition_id)
+                )
 
         return query
 
@@ -579,10 +581,17 @@ class BigQueryEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-met
             schema=schema,
         )
 
-        # Build the query
-        query = select(
-            func.max(partitions_table.c.partition_id).label("max_partition_id")
-        ).where(partitions_table.c.table_name == table.table)
+        # Build the query, ignoring BigQuery's special partition IDs
+        # (__NULL__, __UNPARTITIONED__) which are not valid dates
+        query = (
+            select(func.max(partitions_table.c.partition_id).label("max_partition_id"))
+            .where(partitions_table.c.table_name == table.table)
+            .where(
+                partitions_table.c.partition_id.notin_(
+                    ["__NULL__", "__UNPARTITIONED__"]
+                )
+            )
+        )
 
         # Compile to BigQuery SQL
         compiled_query = query.compile(
