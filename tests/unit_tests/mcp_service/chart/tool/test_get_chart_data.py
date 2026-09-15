@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastmcp import Client
+from flask import current_app
 
 from superset.mcp_service.chart.chart_helpers import (
     rejected_requested_filter_columns,
@@ -254,7 +255,6 @@ def _extract_metrics_and_groupby(
 
 def test_query_context_form_data_supports_request_dependent_jinja_macros() -> None:
     """Chart queries expose filters, URL parameters, and the datasource to Jinja."""
-    from flask import current_app
 
     from superset.charts.data.form_data import set_query_context_form_data
     from superset.common.query_object import QueryObject
@@ -288,7 +288,7 @@ async def test_query_from_form_data_sets_jinja_form_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Unsaved chart queries expose their request inputs to Jinja macros."""
-    from flask import current_app, g
+    from flask import g
 
     from superset.common.query_object import QueryObject
 
@@ -2756,7 +2756,6 @@ async def test_query_from_form_data_zero_row_limit_falls_back_to_default(
     """A falsy int 0 hits the ``or ROW_LIMIT`` fallback and resolves to the
     configured default before coercion runs, so the coercion leaves the cached
     0 case unchanged."""
-    from flask import current_app
 
     module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
     captured: dict[str, Any] = {}
