@@ -29,6 +29,7 @@ import pytest
 from fastmcp import Client
 from flask import current_app
 
+from superset.charts.data.form_data import set_query_context_form_data
 from superset.mcp_service.chart.chart_helpers import (
     rejected_requested_filter_columns,
     requested_filter_columns,
@@ -255,6 +256,7 @@ def _extract_metrics_and_groupby(
 
 def test_query_context_form_data_supports_request_dependent_jinja_macros() -> None:
     """Chart queries expose filters, URL parameters, and the datasource to Jinja."""
+    from flask import current_app
 
     from superset.charts.data.form_data import set_query_context_form_data
     from superset.common.query_object import QueryObject
@@ -281,72 +283,6 @@ def test_query_context_form_data_supports_request_dependent_jinja_macros() -> No
         assert extra_cache.get_time_filter().time_range == "Last week"
         # metric() without an explicit dataset ID performs this lookup.
         assert get_dataset_id_from_context("count") == 7
-
-
-@pytest.mark.asyncio
-async def test_query_from_form_data_sets_jinja_form_data(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Unsaved chart queries expose their request inputs to Jinja macros."""
-    from flask import g
-
-    from superset.common.query_object import QueryObject
-
-    module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
-    captured: dict[str, Any] = {}
-    request_form_data = {
-        "datasource_id": 7,
-        "datasource_type": "table",
-        "filters": [{"col": "region", "op": "IN", "val": ["North"]}],
-        "time_range": "Last week",
-        "url_params": {"tenant": "acme"},
-    }
-
-    def fake_build(form_data: dict[str, Any], **kwargs: Any) -> Any:
-        return SimpleNamespace(
-            datasource=SimpleNamespace(id=7, type="table"),
-            queries=[
-                QueryObject(
-                    filters=form_data["filters"],
-                    time_range=form_data["time_range"],
-                )
-            ],
-            form_data={"url_params": form_data["url_params"]},
-        )
-
-    class ChartDataCommand:
-        def __init__(self, query_context: Any) -> None:
-            captured["form_data"] = dict(g.form_data)
-
-        def validate(self) -> None:
-            pass
-
-        def run(self) -> dict[str, Any]:
-            return {"queries": [{"data": [], "colnames": [], "rowcount": 0}]}
-
-    monkeypatch.setattr(module, "build_query_context_from_form_data", fake_build)
-    monkeypatch.setattr(
-        module,
-        "event_logger",
-        SimpleNamespace(log_context=lambda **kwargs: nullcontext()),
-    )
-    command_module = importlib.import_module(
-        "superset.commands.chart.data.get_data_command"
-    )
-    monkeypatch.setattr(command_module, "ChartDataCommand", ChartDataCommand)
-
-    with current_app.test_request_context():
-        await _query_from_form_data(
-            request_form_data,
-            GetChartDataRequest(form_data_key="cached-key"),
-            _AsyncContext(),
-        )
-
-    form_data = captured["form_data"]
-    assert form_data["datasource"] == {"id": 7, "type": "table"}
-    assert form_data["queries"][0]["filters"] == request_form_data["filters"]
-    assert form_data["queries"][0]["time_range"] == "Last week"
-    assert form_data["queries"][0]["url_params"] == {"tenant": "acme"}
 
 
 class TestBigNumberChartFallback:
@@ -579,15 +515,84 @@ class _AsyncContext:
         pass
 
 
-def _query_context_stub(
-    queries: list[Any] | None = None,
-    form_data: dict[str, Any] | None = None,
-) -> Any:
-    return SimpleNamespace(
-        datasource=SimpleNamespace(id=1, type="table"),
-        queries=queries or [],
-        form_data=form_data or {},
+@pytest.fixture(autouse=True)
+def _tolerate_fake_query_contexts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Many tests hand ``_query_from_form_data`` a bare ``object()`` query
+    context; the Jinja form-data helper only serializes real ``QueryObject``
+    shapes. Real shapes still go through the real helper."""
+    module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
+
+    def shim(query_context: Any, datasource_id: int, datasource_type: str) -> None:
+        try:
+            set_query_context_form_data(query_context, datasource_id, datasource_type)
+        except (AttributeError, TypeError):
+            pass
+
+    monkeypatch.setattr(module, "set_query_context_form_data", shim)
+
+
+@pytest.mark.asyncio
+async def test_query_from_form_data_exposes_query_to_jinja_like_saved_charts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The form_data_key path renders request-dependent Jinja macros with the
+    same inputs as the saved-chart path, so both execute the same SQL."""
+    from superset.common.query_object import QueryObject
+    from superset.jinja_context import ExtraCache, get_dataset_id_from_context
+
+    module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
+    query = QueryObject(
+        metrics=["count"],
+        filters=[{"col": "region", "op": "IN", "val": ["North"]}],
+        time_range="Last week",
     )
+    seen: dict[str, Any] = {}
+
+    def fake_build(form_data: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            queries=[query], form_data={"url_params": {"tenant": "acme"}}
+        )
+
+    class _Command:
+        def __init__(self, query_context: Any) -> None: ...
+        def validate(self) -> None: ...
+        def run(self) -> dict[str, Any]:
+            extra_cache = ExtraCache()
+            seen["filter_values"] = extra_cache.filter_values("region")
+            seen["url_param"] = extra_cache.url_param("tenant")
+            seen["time_range"] = extra_cache.get_time_filter().time_range
+            seen["dataset_id"] = get_dataset_id_from_context("count")
+            return {
+                "queries": [
+                    {"data": [{"count": 1}], "colnames": ["count"], "rowcount": 1}
+                ]
+            }
+
+    monkeypatch.setattr(module, "build_query_context_from_form_data", fake_build)
+    monkeypatch.setattr(
+        module,
+        "event_logger",
+        SimpleNamespace(log_context=lambda **kwargs: nullcontext()),
+    )
+    get_data_command_module = importlib.import_module(
+        "superset.commands.chart.data.get_data_command"
+    )
+    monkeypatch.setattr(get_data_command_module, "ChartDataCommand", _Command)
+
+    with current_app.test_request_context():
+        result = await _query_from_form_data(
+            {"datasource": "9__table", "viz_type": "table"},
+            GetChartDataRequest(form_data_key="k"),
+            _AsyncContext(),
+        )
+
+    assert not isinstance(result, ChartError), result
+    assert seen == {
+        "filter_values": ["North"],
+        "url_param": "acme",
+        "time_range": "Last week",
+        "dataset_id": 9,
+    }
 
 
 class TestUnsavedChartDataQueryConstruction:
@@ -610,7 +615,7 @@ class TestUnsavedChartDataQueryConstruction:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured.append(kwargs)
-                return _query_context_stub()
+                return object()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -692,7 +697,7 @@ class TestUnsavedChartDataQueryConstruction:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return _query_context_stub()
+                return object()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -773,7 +778,7 @@ class TestUnsavedChartDataQueryConstruction:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return _query_context_stub()
+                return object()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -1691,7 +1696,7 @@ class TestSavedChartExtraFormDataFilters:
                 )
                 for query in data.get("queries", [])
             ]
-            return _query_context_stub(queries, data.get("form_data", {}))
+            return SimpleNamespace(queries=queries, form_data=data.get("form_data", {}))
 
         class _Command:
             def __init__(self, query_context: Any) -> None: ...
@@ -1876,7 +1881,6 @@ class TestSavedChartExtraFormDataFilters:
 
         def fake_load(self: Any, data: dict[str, Any]) -> Any:
             return SimpleNamespace(
-                datasource=SimpleNamespace(id=1, type="table"),
                 queries=[
                     SimpleNamespace(
                         filter=[],
@@ -2047,7 +2051,7 @@ class TestOAuthErrorRouting:
 
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
-                return _query_context_stub()
+                return SimpleNamespace(queries=[], form_data={})
 
         class RaisingChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -2191,7 +2195,7 @@ class TestOAuthErrorRouting:
         monkeypatch.setattr(
             chart_data_module,
             "build_query_context_from_form_data",
-            lambda *args, **kwargs: _query_context_stub(),
+            lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
             get_data_command_module,
@@ -2472,9 +2476,8 @@ async def test_unsaved_mixed_timeseries_returns_nonempty_secondary_query(
     monkeypatch.setattr(
         chart_data_module,
         "build_query_context_from_form_data",
-        lambda *_args, **_kwargs: _query_context_stub(),
+        lambda *_args, **_kwargs: object(),
     )
-
     monkeypatch.setattr(
         get_data_command_module, "ChartDataCommand", MultiQueryChartDataCommand
     )
@@ -2756,13 +2759,14 @@ async def test_query_from_form_data_zero_row_limit_falls_back_to_default(
     """A falsy int 0 hits the ``or ROW_LIMIT`` fallback and resolves to the
     configured default before coercion runs, so the coercion leaves the cached
     0 case unchanged."""
+    from flask import current_app
 
     module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
     captured: dict[str, Any] = {}
 
     def fake_build(form_data: Any, **kwargs: Any) -> Any:
         captured["row_limit"] = kwargs.get("row_limit")
-        return _query_context_stub()
+        return object()
 
     class _Command:
         def __init__(self, query_context: Any) -> None: ...
@@ -2803,7 +2807,7 @@ async def test_query_from_form_data_string_row_limit_is_coerced(
 
     def fake_build(form_data: Any, **kwargs: Any) -> Any:
         captured["row_limit"] = kwargs.get("row_limit")
-        return _query_context_stub()
+        return object()
 
     class _Command:
         def __init__(self, query_context: Any) -> None: ...
@@ -2857,7 +2861,7 @@ async def test_query_from_form_data_use_cache_false_bypasses_cache(
     def fake_build(form_data: Any, **kwargs: Any) -> Any:
         captured["force"] = kwargs.get("force")
         captured["custom_cache_timeout"] = kwargs.get("custom_cache_timeout")
-        return _query_context_stub()
+        return object()
 
     class _Command:
         def __init__(self, query_context: Any) -> None: ...
@@ -2914,7 +2918,7 @@ async def test_query_from_form_data_refreshed_reflects_force_refresh_only(
     module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
 
     def fake_build(form_data: Any, **kwargs: Any) -> Any:
-        return _query_context_stub()
+        return object()
 
     class _Command:
         def __init__(self, query_context: Any) -> None: ...

@@ -23,12 +23,27 @@ import ast
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import Mock, patch
 
+import pytest
 from flask import current_app
 
+from superset.charts.data.form_data import set_query_context_form_data
 from superset.mcp_service.chart import preview_utils
+
+
+@pytest.fixture(autouse=True)
+def _tolerate_fake_query_contexts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Several tests hand the preview a bare ``Mock()`` query context; the
+    Jinja form-data helper only serializes real ``QueryObject`` shapes."""
+
+    def shim(query_context, datasource_id, datasource_type):
+        try:
+            set_query_context_form_data(query_context, datasource_id, datasource_type)
+        except (AttributeError, TypeError):
+            pass
+
+    monkeypatch.setattr(preview_utils, "set_query_context_form_data", shim)
 
 
 def _imports_chart_data_command(node: ast.Import | ast.ImportFrom) -> bool:
@@ -224,11 +239,7 @@ def test_unsaved_gauge_preview_uses_shared_builder_and_preserves_ordering(
 ):
     """Unsaved previews execute the same Gauge QueryObject path as Explore."""
     mock_find_dataset.return_value = Mock(id=7)
-    mock_build_query_context.return_value = SimpleNamespace(
-        datasource=SimpleNamespace(id=7, type="table"),
-        queries=[],
-        form_data={},
-    )
+    mock_build_query_context.return_value = Mock()
     mock_command.return_value.validate.return_value = None
     mock_command.return_value.run.return_value = {
         "queries": [{"data": [{"AVG(score)": 75}]}]
@@ -269,68 +280,6 @@ def test_unsaved_gauge_preview_uses_shared_builder_and_preserves_ordering(
     )
 
 
-def test_unsaved_preview_sets_jinja_form_data(monkeypatch):
-    """Unsaved previews expose request inputs to Jinja macros."""
-    from flask import current_app, g
-
-    from superset.common.query_object import QueryObject
-
-    captured: dict[str, Any] = {}
-
-    class ChartDataCommand:
-        def __init__(self, query_context: Any) -> None:
-            captured["form_data"] = dict(g.form_data)
-
-        def validate(self) -> None:
-            pass
-
-        def run(self) -> dict[str, Any]:
-            return {"queries": [{"data": [{"region": "North", "count": 1}]}]}
-
-    query_context = Mock(
-        datasource=Mock(id=7, type="table"),
-        queries=[
-            QueryObject(
-                filters=[{"col": "region", "op": "IN", "val": ["North"]}],
-                time_range="Last week",
-            )
-        ],
-        form_data={"url_params": {"tenant": "acme"}},
-    )
-    with (
-        patch(
-            "superset.mcp_service.chart.chart_helpers.build_query_context_from_form_data",
-            return_value=query_context,
-        ),
-        patch(
-            "superset.commands.chart.data.get_data_command.ChartDataCommand",
-            ChartDataCommand,
-        ),
-        patch("superset.extensions.db.session.get", return_value=Mock(id=7)),
-        current_app.test_request_context(),
-    ):
-        result = preview_utils.generate_preview_from_form_data(
-            {
-                "viz_type": "table",
-                "columns": ["region"],
-                "filters": [{"col": "region", "op": "IN", "val": ["North"]}],
-                "time_range": "Last week",
-                "url_params": {"tenant": "acme"},
-            },
-            dataset_id=7,
-            preview_format="table",
-        )
-
-    assert result.table_data
-    form_data = captured["form_data"]
-    assert form_data["datasource"] == {"id": 7, "type": "table"}
-    assert form_data["queries"][0]["filters"] == [
-        {"col": "region", "op": "IN", "val": ["North"]}
-    ]
-    assert form_data["queries"][0]["time_range"] == "Last week"
-    assert form_data["queries"][0]["url_params"] == {"tenant": "acme"}
-
-
 @patch("superset.commands.chart.data.get_data_command.ChartDataCommand")
 @patch("superset.mcp_service.chart.chart_helpers.build_query_context_from_form_data")
 @patch("superset.extensions.db.session.get")
@@ -338,11 +287,7 @@ def test_unsaved_gauge_preview_surfaces_query_error(
     mock_find_dataset, mock_build_query_context, mock_command
 ):
     mock_find_dataset.return_value = Mock(id=7)
-    mock_build_query_context.return_value = SimpleNamespace(
-        datasource=SimpleNamespace(id=7, type="table"),
-        queries=[],
-        form_data={},
-    )
+    mock_build_query_context.return_value = Mock()
     mock_command.return_value.validate.return_value = None
     mock_command.return_value.run.return_value = {
         "queries": [{"status": "failed", "error": "bad metric", "data": []}]

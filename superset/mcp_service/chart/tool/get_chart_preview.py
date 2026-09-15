@@ -221,6 +221,16 @@ class PreviewFormatStrategy:
         if (dashboard_id := guest_scope.guest_dashboard_id(self.chart)) is not None:
             guest_scope.authorize_query(query_context, dashboard_id, self.chart)
 
+    def _prepare_query(self, query_context: Any) -> None:
+        """Authorize the query and expose it to Jinja macros the same way the
+        chart data API does, so previewed SQL matches executed SQL."""
+        self._authorize_guest_query(query_context)
+        set_query_context_form_data(
+            query_context,
+            self.chart.datasource_id,
+            self.chart.datasource_type,
+        )
+
 
 class URLPreviewStrategy(PreviewFormatStrategy):
     """Generate URL-based preview with explore link."""
@@ -275,12 +285,7 @@ class ASCIIPreviewStrategy(PreviewFormatStrategy):
             if not _first_query_has_fields(query_context):
                 return _no_query_fields_error(self.chart)
 
-            self._authorize_guest_query(query_context)
-            set_query_context_form_data(
-                query_context,
-                self.chart.datasource_id,
-                self.chart.datasource_type,
-            )
+            self._prepare_query(query_context)
             command = ChartDataCommand(query_context)
             command.validate()
             result = command.run()
@@ -360,12 +365,7 @@ class TablePreviewStrategy(PreviewFormatStrategy):
             if not _first_query_has_fields(query_context):
                 return _no_query_fields_error(self.chart)
 
-            self._authorize_guest_query(query_context)
-            set_query_context_form_data(
-                query_context,
-                self.chart.datasource_id,
-                self.chart.datasource_type,
-            )
+            self._prepare_query(query_context)
             command = ChartDataCommand(query_context)
             command.validate()
             result = command.run()
@@ -465,12 +465,7 @@ class VegaLitePreviewStrategy(PreviewFormatStrategy):
             )
 
             # Execute the query
-            self._authorize_guest_query(query_context)
-            set_query_context_form_data(
-                query_context,
-                self.chart.datasource_id,
-                self.chart.datasource_type,
-            )
+            self._prepare_query(query_context)
             command = ChartDataCommand(query_context)
             command.validate()
             result = command.run()
