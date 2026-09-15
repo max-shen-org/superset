@@ -22,9 +22,28 @@ Tests for preview_utils query context column building.
 import ast
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+from flask import current_app
+
+from superset.charts.data.form_data import set_query_context_form_data
 from superset.mcp_service.chart import preview_utils
+
+
+@pytest.fixture(autouse=True)
+def _tolerate_fake_query_contexts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Several tests hand the preview a bare ``Mock()`` query context; the
+    Jinja form-data helper only serializes real ``QueryObject`` shapes."""
+
+    def shim(query_context, datasource_id, datasource_type):
+        try:
+            set_query_context_form_data(query_context, datasource_id, datasource_type)
+        except (AttributeError, TypeError):
+            pass
+
+    monkeypatch.setattr(preview_utils, "set_query_context_form_data", shim)
 
 
 def _imports_chart_data_command(node: ast.Import | ast.ImportFrom) -> bool:
@@ -280,3 +299,51 @@ def test_unsaved_gauge_preview_surfaces_query_error(
     )
     assert result.error_type == "QueryError"
     assert "bad metric" in result.error
+
+
+@patch("superset.commands.chart.data.get_data_command.ChartDataCommand")
+@patch("superset.mcp_service.chart.chart_helpers.build_query_context_from_form_data")
+@patch("superset.extensions.db.session.get")
+def test_unsaved_preview_exposes_query_to_jinja_like_chart_data_api(
+    mock_find_dataset, mock_build_query_context, mock_command
+) -> None:
+    """Unsaved previews render request-dependent Jinja macros with the same
+    inputs as get_chart_data, so previewed data matches executed SQL."""
+    from superset.common.query_object import QueryObject
+    from superset.jinja_context import ExtraCache, get_dataset_id_from_context
+
+    mock_find_dataset.return_value = Mock(id=7)
+    query = QueryObject(
+        filters=[{"col": "region", "op": "IN", "val": ["North"]}],
+        time_range="Last week",
+    )
+    mock_build_query_context.return_value = SimpleNamespace(
+        queries=[query], form_data={"url_params": {"tenant": "acme"}}
+    )
+    seen: dict[str, object] = {}
+
+    def run() -> dict[str, object]:
+        extra_cache = ExtraCache()
+        seen["filter_values"] = extra_cache.filter_values("region")
+        seen["url_param"] = extra_cache.url_param("tenant")
+        seen["time_range"] = extra_cache.get_time_filter().time_range
+        seen["dataset_id"] = get_dataset_id_from_context("count")
+        return {"queries": [{"data": [{"count": 1}], "colnames": ["count"]}]}
+
+    mock_command.return_value.validate.return_value = None
+    mock_command.return_value.run.side_effect = run
+
+    with current_app.test_request_context():
+        result = preview_utils.generate_preview_from_form_data(
+            {"viz_type": "table", "metrics": ["count"]},
+            dataset_id=7,
+            preview_format="table",
+        )
+
+    assert not isinstance(result, preview_utils.ChartError), result
+    assert seen == {
+        "filter_values": ["North"],
+        "url_param": "acme",
+        "time_range": "Last week",
+        "dataset_id": 7,
+    }

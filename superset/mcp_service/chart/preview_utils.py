@@ -27,6 +27,7 @@ import math
 from copy import deepcopy
 from typing import Any, Dict, List
 
+from superset.charts.data.form_data import set_query_context_form_data
 from superset.mcp_service.chart.query_result import (
     metric_result_label,
     normalize_gauge_query_result,
@@ -94,6 +95,7 @@ def generate_preview_from_form_data(
             row_limit=form_data.get("row_limit", 100),
             force=False,
         )
+        set_query_context_form_data(query_context_obj, dataset_id, "table")
 
         # Execute query
         command = ChartDataCommand(query_context_obj)

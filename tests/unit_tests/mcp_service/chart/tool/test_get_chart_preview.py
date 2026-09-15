@@ -25,7 +25,9 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from flask import current_app
 
+from superset.charts.data.form_data import set_query_context_form_data
 from superset.mcp_service.chart.schemas import (
     AccessibilityMetadata,
     ASCIIPreview,
@@ -50,6 +52,23 @@ from superset.mcp_service.chart.tool.get_chart_preview import (
     VegaLitePreviewStrategy,
 )
 from superset.utils import json as utils_json
+
+
+@pytest.fixture(autouse=True)
+def _tolerate_fake_query_contexts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Many tests hand the strategies a bare ``SimpleNamespace`` query context;
+    the Jinja form-data helper only serializes real ``QueryObject`` shapes."""
+    module = importlib.import_module(
+        "superset.mcp_service.chart.tool.get_chart_preview"
+    )
+
+    def shim(query_context: Any, datasource_id: int, datasource_type: str) -> None:
+        try:
+            set_query_context_form_data(query_context, datasource_id, datasource_type)
+        except (AttributeError, TypeError):
+            pass
+
+    monkeypatch.setattr(module, "set_query_context_form_data", shim)
 
 
 def _gauge_chart() -> SimpleNamespace:
@@ -1722,3 +1741,82 @@ def test_saved_gauge_preview_skips_empty_aggregate_groups(
     else:
         assert "Blue" in result.ascii_content
         assert "Empty" not in result.ascii_content
+
+
+@pytest.mark.parametrize(
+    "strategy_cls, preview_format",
+    [
+        (ASCIIPreviewStrategy, "ascii"),
+        (TablePreviewStrategy, "table"),
+        (VegaLitePreviewStrategy, "vega_lite"),
+    ],
+)
+@patch("superset.commands.chart.data.get_data_command.ChartDataCommand")
+@patch(
+    "superset.mcp_service.chart.tool.get_chart_preview."
+    "build_query_context_from_form_data"
+)
+def test_preview_exposes_query_to_jinja_like_chart_data_api(
+    mock_build_query_context: MagicMock,
+    mock_command: MagicMock,
+    strategy_cls: type[PreviewFormatStrategy],
+    preview_format: str,
+) -> None:
+    """Every preview strategy renders request-dependent Jinja macros with the
+    same inputs as get_chart_data, so previewed data matches executed SQL."""
+    from superset.common.query_object import QueryObject
+    from superset.jinja_context import ExtraCache, get_dataset_id_from_context
+
+    chart = SimpleNamespace(
+        id=7,
+        slice_name="Regional sales",
+        viz_type="table",
+        datasource_id=42,
+        datasource_type="table",
+        params=utils_json.dumps(
+            {"viz_type": "table", "metrics": ["count"], "groupby": ["region"]}
+        ),
+        digest="d",
+        uuid=None,
+    )
+    query = QueryObject(
+        metrics=["count"],
+        columns=["region"],
+        filters=[{"col": "region", "op": "IN", "val": ["North"]}],
+        time_range="Last week",
+    )
+    mock_build_query_context.return_value = SimpleNamespace(
+        queries=[query], form_data={"url_params": {"tenant": "acme"}}
+    )
+    seen: dict[str, Any] = {}
+
+    def run() -> dict[str, Any]:
+        extra_cache = ExtraCache()
+        seen["filter_values"] = extra_cache.filter_values("region")
+        seen["url_param"] = extra_cache.url_param("tenant")
+        seen["time_range"] = extra_cache.get_time_filter().time_range
+        seen["dataset_id"] = get_dataset_id_from_context("count")
+        return {
+            "queries": [
+                {
+                    "data": [{"region": "North", "count": 1}],
+                    "colnames": ["region", "count"],
+                }
+            ]
+        }
+
+    mock_command.return_value.validate.return_value = None
+    mock_command.return_value.run.side_effect = run
+
+    with current_app.test_request_context():
+        preview = strategy_cls(
+            chart, GetChartPreviewRequest(identifier=7, format=preview_format)
+        ).generate()
+
+    assert not isinstance(preview, ChartError), preview
+    assert seen == {
+        "filter_values": ["North"],
+        "url_param": "acme",
+        "time_range": "Last week",
+        "dataset_id": 42,
+    }
