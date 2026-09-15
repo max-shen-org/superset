@@ -41,6 +41,22 @@ class PieChartPlugin(BaseChartPlugin):
     native_viz_types: ClassVar[Mapping[str, str]] = {
         "pie": "Pie Chart",
     }
+    defaulted_form_data_fields: ClassVar[Mapping[str, str | tuple[str, ...]]] = {
+        "color_scheme": "color_scheme",
+        "row_limit": "row_limit",
+        "donut": "donut",
+        "show_labels": "show_labels",
+        "sort_by_metric": "sort_by_metric",
+        "show_legend": "show_legend",
+        "legend_orientation": "legendOrientation",
+        "label_type": "label_type",
+        "number_format": "number_format",
+        "date_format": "date_format",
+        "show_total": "show_total",
+        "labels_outside": "labels_outside",
+        "outer_radius": "outerRadius",
+        "inner_radius": "innerRadius",
+    }
 
     def pre_validate(
         self,

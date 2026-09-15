@@ -17,7 +17,7 @@
 
 """Tests for chart utilities module"""
 
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -39,17 +39,27 @@ from superset.mcp_service.chart.chart_utils import (
     map_filter_operator,
     map_table_config,
     map_xy_config,
+    merge_chart_form_data,
     merge_interactive_pivot_ui_config,
     merge_table_column_config,
     validate_chart_dataset,
 )
+from superset.mcp_service.chart.plugin import BaseChartPlugin
+from superset.mcp_service.chart.registry import get_registry
 from superset.mcp_service.chart.schemas import (
     AxisConfig,
+    BoxPlotChartConfig,
+    ChartConfig,
     ColumnRef,
     FilterConfig,
     LegendConfig,
+    MixedTimeseriesChartConfig,
+    PieChartConfig,
+    PivotTableChartConfig,
     SortByConfig,
     TableChartConfig,
+    TreemapChartConfig,
+    WaterfallChartConfig,
     XYChartConfig,
 )
 from superset.utils.core import ColumnSpec, FilterOperator, GenericDataType
@@ -2634,3 +2644,258 @@ class TestDatasetValidatorSkipsSqlMetrics:
         )
         assert normalized.y[0].sql_expression == _SQL_EXPR
         assert normalized.y[0].name is None
+
+
+_METRIC = {"name": "population", "aggregate": "SUM"}
+_OTHER_METRIC = {"name": "gdp_total", "aggregate": "SUM"}
+
+
+def _pie(**overrides: Any) -> PieChartConfig:
+    base: dict[str, Any] = {
+        "chart_type": "pie",
+        "dimension": {"name": "country"},
+        "metric": _METRIC,
+    }
+    return PieChartConfig(**{**base, **overrides})
+
+
+def _xy(**overrides: Any) -> XYChartConfig:
+    base: dict[str, Any] = {
+        "chart_type": "xy",
+        "x": {"name": "ds"},
+        "y": [_METRIC],
+        "kind": "line",
+    }
+    return XYChartConfig(**{**base, **overrides})
+
+
+def _merge(saved_cfg: ChartConfig, update_cfg: ChartConfig) -> dict[str, Any]:
+    saved = map_config_to_form_data(saved_cfg)
+    return merge_chart_form_data(saved, map_config_to_form_data(update_cfg), update_cfg)
+
+
+def test_merge_keeps_saved_color_scheme_and_row_limit_when_omitted() -> None:
+    merged = _merge(
+        _pie(color_scheme="lyftColors", row_limit=25),
+        _pie(metric=_OTHER_METRIC),
+    )
+    assert merged["metric"]["label"] == "SUM(gdp_total)"
+    assert merged["color_scheme"] == "lyftColors"
+    assert merged["row_limit"] == 25
+
+
+def test_merge_keeps_saved_row_limit_for_xy_when_omitted() -> None:
+    merged = _merge(
+        _xy(color_scheme="lyftColors", row_limit=50),
+        _xy(y=[_OTHER_METRIC]),
+    )
+    assert merged["color_scheme"] == "lyftColors"
+    assert merged["row_limit"] == 50
+
+
+def test_merge_explicit_defaults_override_saved_values() -> None:
+    merged = _merge(
+        _pie(color_scheme="lyftColors", row_limit=25, donut=True),
+        _pie(color_scheme="supersetColors", row_limit=100, donut=False),
+    )
+    assert merged["color_scheme"] == "supersetColors"
+    assert merged["row_limit"] == 100
+    assert merged["donut"] is False
+
+
+def test_merge_falls_back_to_defaults_when_nothing_saved() -> None:
+    saved = map_config_to_form_data(_pie())
+    saved.pop("color_scheme")
+    saved.pop("row_limit")
+    cfg = _pie()
+    merged = merge_chart_form_data(saved, map_config_to_form_data(cfg), cfg)
+    assert merged["color_scheme"] == "supersetColors"
+    assert merged["row_limit"] == 100
+
+
+def test_merge_keeps_saved_pie_presentation_controls_when_omitted() -> None:
+    merged = _merge(
+        _pie(
+            donut=True,
+            show_labels=False,
+            show_legend=False,
+            legend_orientation="bottom",
+            number_format=",d",
+            show_total=True,
+            labels_outside=False,
+            outer_radius=50,
+            inner_radius=20,
+        ),
+        _pie(metric=_OTHER_METRIC),
+    )
+    assert merged["donut"] is True
+    assert merged["show_labels"] is False
+    assert merged["show_legend"] is False
+    assert merged["legendOrientation"] == "bottom"
+    assert merged["number_format"] == ",d"
+    assert merged["show_total"] is True
+    assert merged["labels_outside"] is False
+    assert merged["outerRadius"] == 50
+    assert merged["innerRadius"] == 20
+
+
+@pytest.mark.parametrize(
+    ("saved_cfg", "update_cfg", "expected"),
+    [
+        (
+            TreemapChartConfig(
+                chart_type="treemap_v2",
+                groupby=[ColumnRef(name="country")],
+                metric=ColumnRef(**_METRIC),
+                color_scheme="lyftColors",
+                row_limit=25,
+                sort_by_metric=False,
+            ),
+            TreemapChartConfig(
+                chart_type="treemap_v2",
+                groupby=[ColumnRef(name="country")],
+                metric=ColumnRef(**_OTHER_METRIC),
+            ),
+            {"color_scheme": "lyftColors", "row_limit": 25, "sort_by_metric": False},
+        ),
+        (
+            PivotTableChartConfig(
+                chart_type="pivot_table",
+                rows=[ColumnRef(name="country")],
+                metrics=[ColumnRef(**_METRIC)],
+                row_limit=500,
+                aggregate_function="Average",
+                show_row_totals=False,
+                show_column_totals=False,
+                transpose=True,
+                combine_metric=True,
+                value_format=",d",
+            ),
+            PivotTableChartConfig(
+                chart_type="pivot_table",
+                rows=[ColumnRef(name="country")],
+                metrics=[ColumnRef(**_OTHER_METRIC)],
+            ),
+            {
+                "row_limit": 500,
+                "aggregateFunction": "Average",
+                "rowTotals": False,
+                "colTotals": False,
+                "transposePivot": True,
+                "combineMetric": True,
+                "valueFormat": ",d",
+            },
+        ),
+        (
+            MixedTimeseriesChartConfig(
+                chart_type="mixed_timeseries",
+                x=ColumnRef(name="ds"),
+                y=[ColumnRef(**_METRIC)],
+                y_secondary=[ColumnRef(**_METRIC)],
+                primary_kind="area",
+                secondary_kind="scatter",
+                show_legend=False,
+                legend_orientation="bottom",
+                color_scheme="lyftColors",
+                row_limit=50,
+            ),
+            MixedTimeseriesChartConfig(
+                chart_type="mixed_timeseries",
+                x=ColumnRef(name="ds"),
+                y=[ColumnRef(**_OTHER_METRIC)],
+                y_secondary=[ColumnRef(**_METRIC)],
+            ),
+            {
+                "seriesType": "line",
+                "area": True,
+                "seriesTypeB": "scatter",
+                "areaB": False,
+                "show_legend": False,
+                "legendOrientation": "bottom",
+                "color_scheme": "lyftColors",
+                "row_limit": 50,
+            },
+        ),
+        (
+            BoxPlotChartConfig(
+                chart_type="box_plot",
+                distribute_across=[ColumnRef(name="country")],
+                metrics=[ColumnRef(**_METRIC)],
+                whisker_type="min_max",
+                row_limit=50,
+                number_format=",d",
+                date_format="%Y",
+            ),
+            BoxPlotChartConfig(
+                chart_type="box_plot",
+                distribute_across=[ColumnRef(name="country")],
+                metrics=[ColumnRef(**_OTHER_METRIC)],
+            ),
+            {
+                "whiskerOptions": "Min/max (no outliers)",
+                "row_limit": 50,
+                "number_format": ",d",
+                "date_format": "%Y",
+            },
+        ),
+        (
+            WaterfallChartConfig(
+                chart_type="waterfall",
+                x_axis=ColumnRef(name="ds"),
+                metric=ColumnRef(**_METRIC),
+                show_total=False,
+                show_legend=False,
+                increase_label="Up",
+                decrease_label="Down",
+                total_label="Sum",
+                x_axis_time_format="%Y",
+                y_axis_format=",d",
+                row_limit=50,
+            ),
+            WaterfallChartConfig(
+                chart_type="waterfall",
+                x_axis=ColumnRef(name="ds"),
+                metric=ColumnRef(**_OTHER_METRIC),
+            ),
+            {
+                "show_total": False,
+                "show_legend": False,
+                "increase_label": "Up",
+                "decrease_label": "Down",
+                "total_label": "Sum",
+                "x_axis_time_format": "%Y",
+                "y_axis_format": ",d",
+                "row_limit": 50,
+            },
+        ),
+    ],
+    ids=["treemap", "pivot_table", "mixed_timeseries", "box_plot", "waterfall"],
+)
+def test_merge_keeps_saved_defaulted_controls_per_chart_type(
+    saved_cfg: ChartConfig,
+    update_cfg: ChartConfig,
+    expected: dict[str, Any],
+) -> None:
+    merged = _merge(saved_cfg, update_cfg)
+    for key, value in expected.items():
+        assert merged[key] == value, key
+
+
+def test_plugin_defaulted_form_data_fields_are_config_fields() -> None:
+    """Plugin-specific map entries must name real config fields, otherwise the
+    omission check can never match and the control keeps resetting."""
+    config_classes = {
+        get_args(cls.model_fields["chart_type"].annotation)[0]: cls
+        for cls in get_args(get_args(ChartConfig)[0])
+    }
+    for chart_type in get_registry().all_types():
+        plugin = get_registry().get(chart_type)
+        assert plugin is not None
+        if (
+            plugin.defaulted_form_data_fields
+            is BaseChartPlugin.defaulted_form_data_fields
+        ):
+            continue
+        model_fields = config_classes[chart_type].model_fields
+        for config_field in plugin.defaulted_form_data_fields:
+            assert config_field in model_fields, (chart_type, config_field)

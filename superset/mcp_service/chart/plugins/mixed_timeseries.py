@@ -41,6 +41,14 @@ class MixedTimeseriesChartPlugin(BaseChartPlugin):
     native_viz_types: ClassVar[Mapping[str, str]] = {
         "mixed_timeseries": "Mixed Timeseries Chart",
     }
+    defaulted_form_data_fields: ClassVar[Mapping[str, str | tuple[str, ...]]] = {
+        "color_scheme": "color_scheme",
+        "row_limit": "row_limit",
+        "primary_kind": ("seriesType", "area"),
+        "secondary_kind": ("seriesTypeB", "areaB"),
+        "show_legend": "show_legend",
+        "legend_orientation": "legendOrientation",
+    }
 
     def pre_validate(
         self,
