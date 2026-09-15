@@ -22,6 +22,7 @@ from unittest.mock import Mock, patch
 
 import click
 import pytest
+from pydantic import BaseModel, Field
 from superset_extensions_cli.cli import (
     app,
     build_manifest,
@@ -333,6 +334,37 @@ def test_build_manifest_handles_minimal_extension(isolated_filesystem):
     assert manifest.dependencies == []  # Default empty list
     assert manifest.frontend is None
     assert manifest.backend is None
+
+
+@pytest.mark.unit
+def test_build_manifest_supplies_id_when_core_requires_it(isolated_filesystem):
+    """Test build_manifest passes `id` when the installed core declares it
+    as a required input field (apache-superset-core 0.1.0) instead of a
+    computed field."""
+
+    class LegacyManifest(BaseModel):
+        id: str = Field(..., min_length=1)
+        publisher: str
+        name: str
+        displayName: str  # noqa: N815
+        version: str = "0.0.0"
+        dependencies: list[str] = Field(default_factory=list)
+        permissions: list[str] = Field(default_factory=list)
+        frontend: object | None = None
+        backend: object | None = None
+
+    extension_data = {
+        "publisher": "legacy-org",
+        "name": "legacy-extension",
+        "displayName": "Legacy Extension",
+    }
+    (isolated_filesystem / "extension.json").write_text(json.dumps(extension_data))
+
+    with patch("superset_extensions_cli.cli.Manifest", LegacyManifest):
+        manifest = build_manifest(isolated_filesystem, None)
+
+    assert isinstance(manifest, LegacyManifest)
+    assert manifest.id == "legacy-org.legacy-extension"
 
 
 @pytest.mark.unit

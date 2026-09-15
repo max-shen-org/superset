@@ -169,16 +169,23 @@ def build_manifest(cwd: Path, remote_entry: str | None) -> Manifest:
         entrypoint = f"{publisher_snake}.{name_snake}.entrypoint"
         backend = ManifestBackend(entrypoint=entrypoint)
 
-    return Manifest(
-        publisher=extension.publisher,
-        name=extension.name,
-        displayName=extension.displayName,
-        version=extension.version,
-        permissions=extension.permissions,
-        dependencies=extension.dependencies,
-        frontend=frontend,
-        backend=backend,
-    )
+    manifest_kwargs: dict[str, Any] = {
+        "publisher": extension.publisher,
+        "name": extension.name,
+        "displayName": extension.displayName,
+        "version": extension.version,
+        "permissions": extension.permissions,
+        "dependencies": extension.dependencies,
+        "frontend": frontend,
+        "backend": backend,
+    }
+    # Older apache-superset-core releases declare `id` as a required input
+    # field rather than a computed one; supply it when the installed core
+    # expects it so the CLI works against either.
+    if "id" in Manifest.model_fields:
+        manifest_kwargs["id"] = f"{extension.publisher}.{extension.name}"
+
+    return Manifest(**manifest_kwargs)
 
 
 def write_manifest(cwd: Path, manifest: Manifest) -> None:
