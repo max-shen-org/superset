@@ -287,6 +287,12 @@ def test_get_since_until() -> None:
     with pytest.raises(ValueError):  # noqa: PT011
         get_since_until(time_range="tomorrow : yesterday")
 
+    with pytest.raises(ValueError, match="From date cannot be larger"):
+        get_since_until(time_range="2018-01-01T00:00:00 : 2018-01-01T00:00:00")
+
+    with pytest.raises(ValueError, match="From date cannot be larger"):
+        get_since_until(time_range="today : today")
+
 
 @with_feature_flags(CHART_PLUGINS_EXPERIMENTAL=True)
 @patch("superset.utils.date_parser.parse_human_datetime", mock_parse_human_datetime)
