@@ -74,6 +74,28 @@ def _gauge_chart() -> SimpleNamespace:
     )
 
 
+def _query_context_stub(
+    queries: list[Any] | None = None,
+    form_data: dict[str, Any] | None = None,
+) -> SimpleNamespace:
+    query_list = queries or []
+    for query in query_list:
+        if not hasattr(query, "to_dict"):
+            query.to_dict = lambda query=query: {
+                "columns": getattr(query, "columns", []),
+                "metrics": getattr(query, "metrics", []),
+            }
+        if not hasattr(query, "filter"):
+            query.filter = []
+        if not hasattr(query, "time_range"):
+            query.time_range = None
+    return SimpleNamespace(
+        datasource=SimpleNamespace(id=1, type="table"),
+        queries=query_list,
+        form_data=form_data or {},
+    )
+
+
 @patch("superset.commands.chart.data.get_data_command.ChartDataCommand")
 @patch(
     "superset.mcp_service.chart.tool.get_chart_preview."
@@ -82,8 +104,8 @@ def _gauge_chart() -> SimpleNamespace:
 def test_saved_gauge_ascii_preview_uses_native_row_limit_and_renderer(
     mock_build_query_context, mock_command
 ) -> None:
-    query_context = SimpleNamespace(
-        queries=[SimpleNamespace(metrics=["saved_sla"], columns=["team"])]
+    query_context = _query_context_stub(
+        [SimpleNamespace(metrics=["saved_sla"], columns=["team"])]
     )
     mock_build_query_context.return_value = query_context
     mock_command.return_value.validate.return_value = None
@@ -110,8 +132,8 @@ def test_saved_gauge_ascii_preview_uses_native_row_limit_and_renderer(
 def test_saved_gauge_vega_preview_surfaces_runtime_metric_error(
     mock_build_query_context, mock_command
 ) -> None:
-    mock_build_query_context.return_value = SimpleNamespace(
-        queries=[SimpleNamespace(metrics=["saved_sla"], columns=["team"])]
+    mock_build_query_context.return_value = _query_context_stub(
+        [SimpleNamespace(metrics=["saved_sla"], columns=["team"])]
     )
     mock_command.return_value.validate.return_value = None
     mock_command.return_value.run.return_value = {
@@ -124,6 +146,93 @@ def test_saved_gauge_vega_preview_surfaces_runtime_metric_error(
 
     assert isinstance(preview, ChartError)
     assert preview.error_type == "NonNumericGaugeMetric"
+
+
+@pytest.mark.parametrize(
+    "strategy,preview_format",
+    [
+        (ASCIIPreviewStrategy, "ascii"),
+        (TablePreviewStrategy, "table"),
+        (VegaLitePreviewStrategy, "vega_lite"),
+    ],
+)
+def test_preview_sets_jinja_form_data(
+    strategy: type[PreviewFormatStrategy],
+    preview_format: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saved previews expose request inputs to Jinja macros."""
+    from flask import current_app, g
+
+    from superset.common.query_object import QueryObject
+
+    chart_preview_module = importlib.import_module(
+        "superset.mcp_service.chart.tool.get_chart_preview"
+    )
+
+    captured: dict[str, Any] = {}
+    query_context = _query_context_stub(
+        [
+            QueryObject(
+                columns=["region"],
+                metrics=["count"],
+                filters=[{"col": "region", "op": "IN", "val": ["North"]}],
+                time_range="Last week",
+            )
+        ],
+        {"url_params": {"tenant": "acme"}},
+    )
+
+    class ChartDataCommand:
+        def __init__(self, query_context: Any) -> None:
+            captured["form_data"] = dict(g.form_data)
+
+        def validate(self) -> None:
+            pass
+
+        def run(self) -> dict[str, Any]:
+            return {"queries": [{"data": [{"region": "North", "count": 1}]}]}
+
+    chart = SimpleNamespace(
+        id=7,
+        slice_name="Preview",
+        viz_type="table",
+        datasource_id=7,
+        datasource_type="table",
+        params=utils_json.dumps(
+            {
+                "viz_type": "table",
+                "columns": ["region"],
+                "filters": [{"col": "region", "op": "IN", "val": ["North"]}],
+                "time_range": "Last week",
+                "url_params": {"tenant": "acme"},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        chart_preview_module,
+        "build_query_context_from_form_data",
+        lambda *args, **kwargs: query_context,
+    )
+    monkeypatch.setattr(
+        "superset.commands.chart.data.get_data_command.ChartDataCommand",
+        ChartDataCommand,
+    )
+
+    with current_app.test_request_context():
+        result = strategy(
+            chart,
+            GetChartPreviewRequest(identifier=7, format=preview_format),
+        ).generate()
+
+    assert not isinstance(result, ChartError)
+    form_data = captured["form_data"]
+    assert form_data["datasource"] == {"id": 7, "type": "table"}
+    assert form_data["queries"][0]["filters"] == [
+        {"col": "region", "op": "IN", "val": ["North"]}
+    ]
+    assert form_data["queries"][0]["time_range"] == "Last week"
+    assert form_data["queries"][0]["url_params"] == {"tenant": "acme"}
 
 
 class TestPreviewXAxisInQueryContext:
@@ -377,7 +486,7 @@ class TestGetChartPreview:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return object()
+                return _query_context_stub()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -456,7 +565,7 @@ class TestGetChartPreview:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return object()
+                return _query_context_stub()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -527,7 +636,7 @@ class TestGetChartPreview:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return object()
+                return _query_context_stub()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -601,7 +710,7 @@ class TestGetChartPreview:
                     for q in kwargs["queries"]
                 ]
                 queries.append(SimpleNamespace(metrics=["secondary"], columns=[]))
-                return SimpleNamespace(queries=queries)
+                return _query_context_stub(queries)
 
         command_calls: list[str] = []
 
@@ -659,7 +768,7 @@ class TestGetChartPreview:
 
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
-                return object()
+                return _query_context_stub()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -745,7 +854,7 @@ class TestGetChartPreview:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return object()
+                return _query_context_stub()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -903,7 +1012,7 @@ class TestGetChartPreview:
         class QueryContextFactory:
             def create(self, **kwargs: Any) -> object:
                 captured_query_contexts.append(kwargs)
-                return object()
+                return _query_context_stub()
 
         class ChartDataCommand:
             def __init__(self, query_context: object) -> None:
@@ -1356,29 +1465,29 @@ def test_build_query_metrics_empty():
 
 
 def test_first_query_has_fields_true_with_metrics():
-    query_context = SimpleNamespace(
-        queries=[SimpleNamespace(metrics=["count"], columns=[])]
+    query_context = _query_context_stub(
+        [SimpleNamespace(metrics=["count"], columns=[])]
     )
     assert _first_query_has_fields(query_context) is True
 
 
 def test_first_query_has_fields_true_with_columns():
-    query_context = SimpleNamespace(
-        queries=[SimpleNamespace(metrics=[], columns=["region"])]
+    query_context = _query_context_stub(
+        [SimpleNamespace(metrics=[], columns=["region"])]
     )
     assert _first_query_has_fields(query_context) is True
 
 
 def test_first_query_has_fields_false_when_both_empty():
-    query_context = SimpleNamespace(queries=[SimpleNamespace(metrics=[], columns=[])])
+    query_context = _query_context_stub([SimpleNamespace(metrics=[], columns=[])])
     assert _first_query_has_fields(query_context) is False
 
 
 def test_first_query_has_fields_ignores_later_populated_query():
     # Preview strategies render only the first query result, so a populated
     # secondary mixed-timeseries query must not make an empty preview valid.
-    query_context = SimpleNamespace(
-        queries=[
+    query_context = _query_context_stub(
+        [
             SimpleNamespace(metrics=[], columns=[]),
             SimpleNamespace(metrics=["count"], columns=[]),
         ]
@@ -1667,8 +1776,8 @@ def test_saved_gauge_dispatch_and_validation_agree(
             "superset.commands.chart.data.get_data_command.ChartDataCommand"
         ) as command,
     ):
-        build.return_value = SimpleNamespace(
-            queries=[SimpleNamespace(metrics=["saved_sla"])]
+        build.return_value = _query_context_stub(
+            [SimpleNamespace(metrics=["saved_sla"])]
         )
         command.return_value.run.return_value = {
             "queries": [{"data": [{"team": "Blue", "saved_sla": "bad"}]}]
@@ -1695,8 +1804,8 @@ def test_saved_gauge_preview_skips_empty_aggregate_groups(
             "superset.commands.chart.data.get_data_command.ChartDataCommand"
         ) as command,
     ):
-        build.return_value = SimpleNamespace(
-            queries=[SimpleNamespace(metrics=["saved_sla"])]
+        build.return_value = _query_context_stub(
+            [SimpleNamespace(metrics=["saved_sla"])]
         )
         command.return_value.run.return_value = {
             "queries": [

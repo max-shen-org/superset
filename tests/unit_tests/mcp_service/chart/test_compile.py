@@ -23,6 +23,8 @@ path so fast-path tools (``generate_explore_link``, ``update_chart_preview``)
 that only use Tier-1 validation are exercised end-to-end.
 """
 
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -473,7 +475,11 @@ def test_compile_gauge_uses_shared_query_builder_and_skips_invalid_dials(
     """Gauge compile matches frontend ordering and retains finite groups."""
     from superset.mcp_service.chart.compile import _compile_chart
 
-    mock_build_query_context.return_value = Mock()
+    mock_build_query_context.return_value = SimpleNamespace(
+        datasource=SimpleNamespace(id=3, type="table"),
+        queries=[],
+        form_data={},
+    )
     mock_cmd_cls.return_value.validate.return_value = None
     mock_cmd_cls.return_value.run.return_value = {
         "queries": [
@@ -511,6 +517,66 @@ def test_compile_gauge_uses_shared_query_builder_and_skips_invalid_dials(
     )
 
 
+def test_compile_sets_jinja_form_data(monkeypatch):
+    """Compile checks expose request inputs to Jinja macros."""
+    from flask import current_app, g
+
+    from superset.common.query_object import QueryObject
+    from superset.mcp_service.chart.compile import _compile_chart
+
+    captured: dict[str, Any] = {}
+    query_context = Mock(
+        datasource=Mock(id=7, type="table"),
+        queries=[
+            QueryObject(
+                filters=[{"col": "region", "op": "IN", "val": ["North"]}],
+                time_range="Last week",
+            )
+        ],
+        form_data={"url_params": {"tenant": "acme"}},
+    )
+
+    class ChartDataCommand:
+        def __init__(self, query_context: Any) -> None:
+            captured["form_data"] = dict(g.form_data)
+
+        def validate(self) -> None:
+            pass
+
+        def run(self) -> dict[str, Any]:
+            return {"queries": [{"data": [{"region": "North", "count": 1}]}]}
+
+    monkeypatch.setattr(
+        "superset.mcp_service.chart.chart_helpers.build_query_context_from_form_data",
+        lambda *args, **kwargs: query_context,
+    )
+    monkeypatch.setattr(
+        "superset.commands.chart.data.get_data_command.ChartDataCommand",
+        ChartDataCommand,
+    )
+
+    with current_app.test_request_context():
+        result = _compile_chart(
+            {
+                "viz_type": "table",
+                "columns": ["region"],
+                "filters": [{"col": "region", "op": "IN", "val": ["North"]}],
+                "time_range": "Last week",
+                "url_params": {"tenant": "acme"},
+            },
+            dataset_id=7,
+        )
+
+    assert result.success
+    form_data = captured["form_data"]
+    assert form_data["datasource"] == {"id": 7, "type": "table"}
+    assert form_data["queries"][0]["filters"] == [
+        {"col": "region", "op": "IN", "val": ["North"]}
+    ]
+    assert form_data["queries"][0]["time_range"] == "Last week"
+    assert form_data["queries"][0]["url_params"] == {"tenant": "acme"}
+
+
 @patch("superset.commands.chart.data.get_data_command.ChartDataCommand")
 @patch("superset.mcp_service.chart.chart_helpers.build_query_context_from_form_data")
 def test_compile_gauge_accepts_numeric_saved_metric_result(
@@ -519,7 +585,11 @@ def test_compile_gauge_accepts_numeric_saved_metric_result(
     """Saved/SQL metrics stay supported when their concrete output is numeric."""
     from superset.mcp_service.chart.compile import _compile_chart
 
-    mock_build_query_context.return_value = Mock()
+    mock_build_query_context.return_value = SimpleNamespace(
+        datasource=SimpleNamespace(id=3, type="table"),
+        queries=[],
+        form_data={},
+    )
     mock_cmd_cls.return_value.validate.return_value = None
     mock_cmd_cls.return_value.run.return_value = {
         "queries": [{"data": [{"saved_sla": 99.5}]}]
@@ -546,7 +616,11 @@ def test_compile_chart_returns_database_error_when_wrapped_in_query_failed(
     from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
     from superset.mcp_service.chart.compile import _compile_chart
 
-    mock_factory.return_value.create.return_value = Mock()
+    mock_factory.return_value.create.return_value = SimpleNamespace(
+        datasource=SimpleNamespace(id=3, type="table"),
+        queries=[],
+        form_data={},
+    )
     mock_cmd_cls.return_value.validate.return_value = None
 
     # Real scenario: __cause__ is NOT set, error is just a string
@@ -597,7 +671,11 @@ def test_compile_chart_returns_database_error_on_raw_sqlalchemy_error(
 
     from superset.mcp_service.chart.compile import _compile_chart
 
-    mock_factory.return_value.create.return_value = Mock()
+    mock_factory.return_value.create.return_value = SimpleNamespace(
+        datasource=SimpleNamespace(id=3, type="table"),
+        queries=[],
+        form_data={},
+    )
     mock_cmd_cls.return_value.validate.return_value = None
     mock_cmd_cls.return_value.run.side_effect = OperationalError(
         "connection to server at '10.0.0.1', port 5432 failed: Connection timed out",

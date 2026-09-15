@@ -1067,6 +1067,11 @@ async def _query_from_form_data(  # noqa: C901
             force=effective_force,
             custom_cache_timeout=request.cache_timeout,
         )
+        set_query_context_form_data(
+            query_context,
+            query_context.datasource.id,
+            query_context.datasource.type,
+        )
 
         await ctx.report_progress(3, 4, "Executing data query")
         with event_logger.log_context(action="mcp.get_chart_data.query_execution"):
