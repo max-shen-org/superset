@@ -720,7 +720,7 @@ def get_since_until(  # pylint: disable=too-many-arguments,too-many-locals,too-m
 
                 _since, _until = map(datetime_eval, since_and_until)
 
-    if _since and _until and _since > _until:
+    if _since and _until and _since >= _until:
         raise ValueError(_("From date cannot be larger than to date"))
 
     return _since, _until
