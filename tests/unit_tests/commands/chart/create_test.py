@@ -24,8 +24,11 @@ Slice.datasource only ever resolves a ``table``-typed datasource, so even a
 successfully created chart of another type could never actually render.
 """
 
+import uuid
+
 import pytest
 from pytest_mock import MockerFixture
+from sqlalchemy.orm.session import Session
 
 from superset.commands.chart.create import CreateChartCommand
 from superset.commands.chart.exceptions import (
@@ -123,6 +126,76 @@ def test_create_chart_accepts_table_datasource(mocker: MockerFixture) -> None:
     cmd.validate()
 
     assert cmd._properties["datasource_name"] == "my_table"
+
+
+def test_create_chart_accepts_semantic_view_datasource(mocker: MockerFixture) -> None:
+    """Semantic views are a supported chart datasource (Slice resolves them
+    via the ``semantic_view`` relationship), so saving a chart built on one
+    must not be rejected as an invalid datasource_type."""
+    _base_mocks(mocker)
+    datasource = mocker.MagicMock(name="semantic_view_datasource")
+    datasource.name = "my_view"
+    get_datasource_by_id = mocker.patch(
+        "superset.commands.chart.create.get_datasource_by_id",
+        return_value=datasource,
+    )
+    mocker.patch("superset.commands.chart.create.security_manager.raise_for_access")
+
+    cmd = CreateChartCommand(
+        {
+            "datasource_id": 11,
+            "datasource_type": "semantic_view",
+            "slice_name": "some_name",
+            "viz_type": "table",
+        }
+    )
+    cmd.validate()
+
+    get_datasource_by_id.assert_called_once_with(11, "semantic_view")
+    assert cmd._properties["datasource_name"] == "my_view"
+
+
+def test_create_chart_resolves_real_semantic_view(
+    mocker: MockerFixture, session: Session
+) -> None:
+    """End-to-end through the real DAO: a ``semantic_view`` datasource_type
+    resolves to the ``SemanticView`` row, populates ``datasource_name`` from
+    it, and hands that same object to the access check."""
+    from superset.semantic_layers.models import SemanticLayer, SemanticView
+
+    SemanticView.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    layer = SemanticLayer(
+        uuid=uuid.uuid4(), name="layer", type="test", configuration="{}"
+    )
+    session.add(layer)
+    session.flush()
+    view = SemanticView(
+        id=11,
+        uuid=uuid.uuid4(),
+        name="real_view",
+        semantic_layer_uuid=layer.uuid,
+        configuration="{}",
+    )
+    session.add(view)
+    session.flush()
+
+    _base_mocks(mocker)
+    raise_for_access = mocker.patch(
+        "superset.commands.chart.create.security_manager.raise_for_access"
+    )
+
+    cmd = CreateChartCommand(
+        {
+            "datasource_id": 11,
+            "datasource_type": "semantic_view",
+            "slice_name": "some_name",
+            "viz_type": "table",
+        }
+    )
+    cmd.validate()
+
+    assert cmd._properties["datasource_name"] == "real_view"
+    raise_for_access.assert_called_once_with(datasource=view)
 
 
 def test_create_chart_datasource_access_denied_still_raises_forbidden(
