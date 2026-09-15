@@ -931,9 +931,9 @@ def add_xy_sort_config(
         return
     column = config.sort_by.column
     x_name = form_data.get("x_axis")
-    is_multi_series = bool(form_data.get("groupby")) or len(
-        form_data.get("metrics", [])
-    ) > 1
+    is_multi_series = (
+        bool(form_data.get("groupby")) or len(form_data.get("metrics", [])) > 1
+    )
     if is_multi_series:
         if column == x_name:
             column = "name"
