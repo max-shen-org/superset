@@ -2306,6 +2306,16 @@ class XYChartConfig(BaseChartConfig):
         ge=1,
         le=10000,
     )
+    sort_by: SortByConfig | None = Field(
+        None,
+        description=(
+            "Order x-axis categories by a metric label or by the x column "
+            "itself, e.g. {'column': 'SUM(sales)', 'ascending': False}. A bare "
+            "string sorts descending. Defaults to category-name order when "
+            "unset. Not allowed together with time_grain (temporal x-axis)."
+        ),
+        validation_alias=AliasChoices("sort_by", "x_axis_sort", "order_by"),
+    )
 
     @field_validator("group_by", mode="before")
     @classmethod
@@ -2317,6 +2327,11 @@ class XYChartConfig(BaseChartConfig):
     def coerce_x_column_name(cls, v: Any) -> Any:
         """Accept a bare column name string for the x-axis."""
         return {"name": v} if isinstance(v, str) else v
+
+    @field_validator("sort_by", mode="before")
+    @classmethod
+    def coerce_sort_by_column(cls, v: Any) -> Any:
+        return {"column": v} if isinstance(v, str) else v
 
     @field_validator("y", mode="before")
     @classmethod
@@ -2337,6 +2352,15 @@ class XYChartConfig(BaseChartConfig):
         if self.group_by:
             for i, col in enumerate(self.group_by):
                 _reject_sql_expression_on_dimension(col, f"group_by[{i}]")
+        return self
+
+    @model_validator(mode="after")
+    def reject_sort_by_with_time_grain(self) -> "XYChartConfig":
+        if self.sort_by and self.time_grain:
+            raise ValueError(
+                "sort_by cannot be combined with time_grain: sorting applies "
+                "to categorical x-axes only"
+            )
         return self
 
     @model_validator(mode="after")

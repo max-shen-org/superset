@@ -21,6 +21,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from superset.constants import NO_TIME_RANGE
 from superset.mcp_service.chart.chart_utils import (
@@ -1961,6 +1962,142 @@ class TestMapXYConfigWithNonTemporalColumn:
         # time_grain_sqla should be None, not P1M
         assert result["time_grain_sqla"] is None
         assert result["x_axis_sort_series_type"] == "name"
+
+
+class TestMapXYConfigSortBy:
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_no_sort_by_preserves_default(self, mock_is_temporal) -> None:
+        mock_is_temporal.return_value = False
+        config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+        )
+
+        result = map_xy_config(config, dataset_id=123)
+
+        assert "x_axis_sort" not in result
+
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_single_series_sorts_by_metric_label(self, mock_is_temporal) -> None:
+        mock_is_temporal.return_value = False
+        config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+            sort_by=SortByConfig(column="SUM(sales)"),
+        )
+
+        result = map_xy_config(config, dataset_id=123)
+
+        assert result["x_axis_sort"] == "SUM(sales)"
+        assert result["x_axis_sort_asc"] is False
+
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_sort_by_coerces_bare_string_and_dict(self, mock_is_temporal) -> None:
+        mock_is_temporal.return_value = False
+        string_config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+            sort_by="SUM(sales)",
+        )
+        dict_config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+            sort_by={"column": "year", "ascending": True},
+        )
+
+        string_result = map_xy_config(string_config, dataset_id=123)
+        dict_result = map_xy_config(dict_config, dataset_id=123)
+
+        assert string_result["x_axis_sort"] == "SUM(sales)"
+        assert string_result["x_axis_sort_asc"] is False
+        assert dict_result["x_axis_sort"] == "year"
+        assert dict_result["x_axis_sort_asc"] is True
+
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_multi_series_metric_label_sorts_by_sum(self, mock_is_temporal) -> None:
+        mock_is_temporal.return_value = False
+        config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+            group_by=[ColumnRef(name="region")],
+            sort_by=SortByConfig(column="SUM(sales)"),
+        )
+
+        result = map_xy_config(config, dataset_id=123)
+
+        assert result["x_axis_sort"] == "sum"
+
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_multi_series_x_column_sorts_by_name(self, mock_is_temporal) -> None:
+        mock_is_temporal.return_value = False
+        config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+            group_by=[ColumnRef(name="region")],
+            sort_by=SortByConfig(column="year", ascending=True),
+        )
+
+        result = map_xy_config(config, dataset_id=123)
+
+        assert result["x_axis_sort"] == "name"
+        assert result["x_axis_sort_asc"] is True
+
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_multi_series_aggregate_sort_is_preserved(self, mock_is_temporal) -> None:
+        mock_is_temporal.return_value = False
+        config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="year"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="bar",
+            group_by=[ColumnRef(name="region")],
+            sort_by=SortByConfig(column="max"),
+        )
+
+        result = map_xy_config(config, dataset_id=123)
+
+        assert result["x_axis_sort"] == "max"
+
+    @patch("superset.mcp_service.chart.chart_utils.is_column_truly_temporal")
+    def test_temporal_x_axis_ignores_sort_by_with_warning(
+        self, mock_is_temporal
+    ) -> None:
+        mock_is_temporal.return_value = True
+        config = XYChartConfig(
+            chart_type="xy",
+            x=ColumnRef(name="created_at"),
+            y=[ColumnRef(name="sales", aggregate="SUM")],
+            kind="line",
+            sort_by=SortByConfig(column="SUM(sales)"),
+        )
+
+        result = map_xy_config(config, dataset_id=123)
+
+        assert "x_axis_sort" not in result
+        assert any("sort_by" in warning for warning in result["_mcp_warnings"])
+
+    def test_sort_by_cannot_be_combined_with_time_grain(self) -> None:
+        with pytest.raises(ValidationError, match="time_grain"):
+            XYChartConfig(
+                chart_type="xy",
+                x=ColumnRef(name="year"),
+                y=[ColumnRef(name="sales", aggregate="SUM")],
+                kind="bar",
+                time_grain="P1M",
+                sort_by="SUM(sales)",
+            )
 
 
 class TestEnsureTemporalAdhocFilter:

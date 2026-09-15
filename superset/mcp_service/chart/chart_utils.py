@@ -908,6 +908,41 @@ def add_orientation_config(form_data: Dict[str, Any], config: XYChartConfig) -> 
         form_data["orientation"] = config.orientation
 
 
+_SORT_SERIES_TYPES = frozenset({"name", "sum", "min", "max", "avg"})
+
+
+def add_xy_sort_config(
+    form_data: Dict[str, Any], config: XYChartConfig, x_is_temporal: bool
+) -> None:
+    """Map ``sort_by`` to the Timeseries ``x_axis_sort``/``x_axis_sort_asc`` controls.
+
+    Single-series charts (no groupby, one metric) sort by a column or metric
+    label. Multi-series charts sort by an aggregate of the series values
+    (``sum``/``min``/``max``/``avg``) or by category ``name``; a metric label
+    is translated to ``sum`` and the x column to ``name``.
+    """
+    if config.sort_by is None:
+        return
+    if x_is_temporal:
+        form_data.setdefault("_mcp_warnings", []).append(
+            "sort_by was ignored because the x-axis column is temporal; "
+            "time series are always ordered chronologically."
+        )
+        return
+    column = config.sort_by.column
+    x_name = form_data.get("x_axis")
+    is_multi_series = (
+        bool(form_data.get("groupby")) or len(form_data.get("metrics", [])) > 1
+    )
+    if is_multi_series:
+        if column == x_name:
+            column = "name"
+        elif column not in _SORT_SERIES_TYPES:
+            column = "sum"
+    form_data["x_axis_sort"] = column
+    form_data["x_axis_sort_asc"] = config.sort_by.ascending
+
+
 def configure_temporal_handling(
     form_data: Dict[str, Any],
     x_is_temporal: bool,
@@ -1185,6 +1220,7 @@ def map_xy_config(  # noqa: C901
     add_color_scheme(form_data, config.color_scheme)
     add_currency_format(form_data, config.currency_format)
     add_xy_data_label_options(form_data, config, x_is_temporal)
+    add_xy_sort_config(form_data, config, x_is_temporal)
 
     return form_data
 
