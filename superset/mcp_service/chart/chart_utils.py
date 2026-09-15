@@ -652,6 +652,35 @@ _GAUGE_PRESENTATION_FORM_DATA_KEYS = frozenset(
 )
 
 
+def _drop_omitted_defaulted_fields(
+    patch: dict[str, Any],
+    existing_form_data: dict[str, Any],
+    config: ChartConfig,
+) -> None:
+    """Remove mapper-materialized defaults for config fields the caller omitted.
+
+    The mapper cannot distinguish an omitted field from one explicitly set to
+    its default, so this consults ``model_fields_set`` and the plugin's
+    ``defaulted_form_data_fields`` map. A key is only dropped when the saved
+    form_data carries a value for it; otherwise the default still applies.
+    """
+    # Local import: see map_config_to_form_data for the plugin import cycle.
+    from superset.mcp_service.chart.registry import get_registry
+
+    chart_type = getattr(config, "chart_type", None)
+    plugin = get_registry().get(chart_type) if chart_type else None
+    if plugin is None:
+        return
+    fields_set = config.model_fields_set
+    for config_field, form_data_keys in plugin.defaulted_form_data_fields.items():
+        if config_field in fields_set or config_field not in type(config).model_fields:
+            continue
+        keys = (form_data_keys,) if isinstance(form_data_keys, str) else form_data_keys
+        for key in keys:
+            if key in existing_form_data:
+                patch.pop(key, None)
+
+
 def _without_generated_gauge_time_filter(
     form_data: dict[str, Any],
 ) -> list[Any]:
@@ -693,7 +722,9 @@ def merge_chart_form_data(  # noqa: C901
         fields_set = config.model_fields_set
         if "filters" not in fields_set:
             preserve_previous_adhoc_filters(new_form_data, existing_form_data)
-        merged = {**existing_form_data, **new_form_data}
+        patch = dict(new_form_data)
+        _drop_omitted_defaulted_fields(patch, existing_form_data, config)
+        merged = {**existing_form_data, **patch}
         # An explicitly empty collection clears the control rather than
         # falling through to the inherited value.
         for config_field, form_data_field in (

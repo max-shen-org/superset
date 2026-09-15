@@ -40,6 +40,12 @@ class BoxPlotChartPlugin(BaseChartPlugin):
     native_viz_types: ClassVar[Mapping[str, str]] = {
         "box_plot": "Box Plot",
     }
+    defaulted_form_data_fields: ClassVar[Mapping[str, str | tuple[str, ...]]] = {
+        "row_limit": "row_limit",
+        "whisker_type": "whiskerOptions",
+        "number_format": "number_format",
+        "date_format": "date_format",
+    }
 
     def pre_validate(
         self,

@@ -41,6 +41,10 @@ class HandlebarsChartPlugin(BaseChartPlugin):
     native_viz_types: ClassVar[Mapping[str, str]] = {
         "handlebars": "Custom Template Chart",
     }
+    defaulted_form_data_fields: ClassVar[Mapping[str, str | tuple[str, ...]]] = {
+        "row_limit": "row_limit",
+        "order_desc": "order_desc",
+    }
 
     def pre_validate(
         self,

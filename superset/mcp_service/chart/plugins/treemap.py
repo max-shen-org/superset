@@ -41,6 +41,11 @@ class TreemapChartPlugin(BaseChartPlugin):
     native_viz_types: ClassVar[Mapping[str, str]] = {
         "treemap_v2": "Treemap",
     }
+    defaulted_form_data_fields: ClassVar[Mapping[str, str | tuple[str, ...]]] = {
+        "color_scheme": "color_scheme",
+        "row_limit": "row_limit",
+        "sort_by_metric": "sort_by_metric",
+    }
 
     def pre_validate(
         self,
