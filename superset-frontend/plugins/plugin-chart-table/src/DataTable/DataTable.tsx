@@ -537,12 +537,6 @@ export default typedMemo(function DataTable<D extends object>({
       resultPageCount = 0;
     }
     resultCurrentPageSize = serverPageSize;
-    const foundPageSizeIndex = pageSizeOptions.findIndex(
-      ([option]) => option >= resultCurrentPageSize,
-    );
-    if (foundPageSizeIndex === -1) {
-      resultCurrentPageSize = 0;
-    }
     resultCurrentPage = serverPaginationData?.currentPage ?? 0;
     resultOnPageChange = (pageNumber: number) =>
       onServerPaginationChange(pageNumber, serverPageSize);

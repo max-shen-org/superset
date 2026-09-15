@@ -181,6 +181,95 @@ test('transformProps retains percentage rules with automatic bounds under server
   expect(formatter?.getColorFromValue(2467063)).toBe('#FF0000FF');
 });
 
+test('keeps the configured server page size when row count is smaller', () => {
+  const data = Array.from({ length: 12 }, (_, index) => ({
+    num: index + 1,
+  }));
+  const props = transformProps({
+    ...testData.raw,
+    rawFormData: {
+      ...testData.raw.rawFormData,
+      server_pagination: true,
+      server_page_length: 20,
+    },
+    queriesData: [
+      {
+        ...testData.raw.queriesData[0],
+        data,
+        colnames: ['num'],
+        coltypes: [GenericDataType.Numeric],
+      },
+      {
+        ...testData.raw.queriesData[0],
+        data: [{ rowcount: 12 }],
+        colnames: ['rowcount'],
+        coltypes: [GenericDataType.Numeric],
+      },
+    ],
+  });
+
+  render(
+    ProviderWrapper({
+      children: <TableChart {...props} sticky={false} />,
+    }),
+  );
+
+  const pageSizeSelect = screen.getByRole('combobox', {
+    name: 'Show entries per page',
+  });
+  expect(pageSizeSelect.parentElement).toHaveTextContent('20');
+
+  fireEvent.mouseDown(pageSizeSelect);
+  expect(screen.queryByRole('option', { name: /^0$/ })).not.toBeInTheDocument();
+});
+
+test('keeps the current server page size available when row count is smaller', () => {
+  const data = Array.from({ length: 12 }, (_, index) => ({
+    num: index + 1,
+  }));
+  const props = {
+    ...transformProps({
+      ...testData.raw,
+      rawFormData: {
+        ...testData.raw.rawFormData,
+        server_pagination: true,
+        server_page_length: 20,
+      },
+      queriesData: [
+        {
+          ...testData.raw.queriesData[0],
+          data,
+          colnames: ['num'],
+          coltypes: [GenericDataType.Numeric],
+        },
+        {
+          ...testData.raw.queriesData[0],
+          data: [{ rowcount: 12 }],
+          colnames: ['rowcount'],
+          coltypes: [GenericDataType.Numeric],
+        },
+      ],
+    }),
+    serverPaginationData: { pageSize: 10, currentPage: 0 },
+  };
+
+  render(
+    ProviderWrapper({
+      children: <TableChart {...props} sticky={false} />,
+    }),
+  );
+
+  const pageSizeSelect = screen.getByRole('combobox', {
+    name: 'Show entries per page',
+  });
+  expect(pageSizeSelect.parentElement).toHaveTextContent('10');
+
+  fireEvent.mouseDown(pageSizeSelect);
+  expect(screen.getByRole('option', { name: '10' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: '20' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: /^0$/ })).not.toBeInTheDocument();
+});
+
 describe('plugin-chart-table', () => {
   describe('transformProps', () => {
     test('should parse pageLength to pageSize', () => {
