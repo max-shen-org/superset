@@ -87,16 +87,16 @@ export default memo(function SelectPageSize({
   onChange,
 }: SelectPageSizeProps) {
   const sizeOptionValues = sizeOptions.map(getOptionValue);
-  let options = [...sizeOptions];
+  const options = [...sizeOptions];
   // insert current size to list
   if (
     currentSize !== undefined &&
     (currentSize !== total || !sizeOptionValues.includes(0)) &&
     !sizeOptionValues.includes(currentSize)
   ) {
-    options = [...sizeOptions];
+    const insertIndex = sizeOptionValues.findIndex(x => x > currentSize);
     options.splice(
-      sizeOptionValues.findIndex(x => x > currentSize),
+      insertIndex === -1 ? options.length : insertIndex,
       0,
       formatSelectOptions([currentSize])[0],
     );

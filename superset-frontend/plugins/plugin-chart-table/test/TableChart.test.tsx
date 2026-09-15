@@ -181,6 +181,91 @@ test('transformProps retains percentage rules with automatic bounds under server
   expect(formatter?.getColorFromValue(2467063)).toBe('#FF0000FF');
 });
 
+const renderServerPaginatedTable = ({
+  rowCount,
+  serverPageLength,
+  serverPaginationData,
+}: {
+  rowCount: number;
+  serverPageLength: number;
+  serverPaginationData?: { pageSize: number; currentPage: number };
+}) => {
+  const props = transformProps({
+    ...testData.raw,
+    rawFormData: {
+      ...testData.raw.rawFormData,
+      server_pagination: true,
+      server_page_length: serverPageLength,
+    },
+    queriesData: [
+      {
+        ...testData.raw.queriesData[0],
+        colnames: ['num'],
+        coltypes: [GenericDataType.Numeric],
+        data: Array.from({ length: rowCount }, (_, index) => ({
+          num: index + 1,
+        })),
+      },
+      {
+        ...testData.raw.queriesData[0],
+        colnames: ['rowcount'],
+        coltypes: [GenericDataType.Numeric],
+        data: [{ rowcount: rowCount }],
+      },
+    ],
+  });
+  render(
+    ProviderWrapper({
+      children: (
+        <TableChart
+          {...props}
+          {...(serverPaginationData ? { serverPaginationData } : {})}
+          sticky={false}
+        />
+      ),
+    }),
+  );
+  const pageSizeSelect = screen.getByRole('combobox', {
+    name: 'Show entries per page',
+  });
+  fireEvent.mouseDown(pageSizeSelect);
+  return {
+    selectedPageSize: pageSizeSelect.parentElement,
+    optionLabels: screen
+      .getAllByRole('option')
+      .map(option => option.textContent),
+  };
+};
+
+test('server pagination keeps the configured page size when row count is smaller', () => {
+  const { selectedPageSize, optionLabels } = renderServerPaginatedTable({
+    rowCount: 12,
+    serverPageLength: 20,
+  });
+  expect(selectedPageSize).toHaveTextContent('20');
+  expect(optionLabels).toEqual(['10', '20']);
+});
+
+test('server pagination shows a configured page size that is not a preset option', () => {
+  const { selectedPageSize, optionLabels } = renderServerPaginatedTable({
+    rowCount: 12,
+    serverPageLength: 15,
+  });
+  expect(selectedPageSize).toHaveTextContent('15');
+  expect(optionLabels).toEqual(['10', '15']);
+});
+
+test('server pagination keeps the selected page size above the configured one', () => {
+  const { selectedPageSize, optionLabels } = renderServerPaginatedTable({
+    rowCount: 12,
+    serverPageLength: 20,
+    serverPaginationData: { pageSize: 50, currentPage: 0 },
+  });
+  expect(selectedPageSize).toHaveTextContent('50');
+  expect(optionLabels).toEqual(expect.arrayContaining(['20', '50']));
+  expect(optionLabels).not.toContain('0');
+});
+
 describe('plugin-chart-table', () => {
   describe('transformProps', () => {
     test('should parse pageLength to pageSize', () => {
